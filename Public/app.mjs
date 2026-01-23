@@ -1,25 +1,49 @@
 export class KanbanBoard extends HTMLElement {
   constructor() {
     super();
-    // 1. Attach Shadow DOM: This ensures styles are isolated (encapsulated)
     this.shadow = this.attachShadow({ mode: "open" });
-    
-    // Default state
-    this.data = {
-      columns: [
-        { id: 1, title: "To Do", tasks: ["Task A", "Task B"] },
-        { id: 2, title: "Doing", tasks: ["Task C"] },
-        { id: 3, title: "Done", tasks: ["Task D"] }
-      ]
-    };
+    this.data = { columns: [] };
+    this.isLoading = true;
   }
 
-  // Called when the element is added to the DOM
   connectedCallback() {
     this.render();
+    this.fetchBoardData();
   }
 
-  // 2. Define internal styles (scoped only to this component)
+  // 1. GET: Fetch initial data
+  async fetchBoardData() {
+    try {
+        const response = await fetch('/api/board');
+        this.data = await response.json();
+        this.isLoading = false;
+        this.render(); 
+    } catch (error) {
+        console.error("Failed to load board:", error);
+    }
+  }
+
+  // 2. POST: Add a new column to the backend
+  async addColumn(title) {
+    try {
+        const response = await fetch('/api/columns', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json' 
+            },
+            body: JSON.stringify({ title: title })
+        });
+        
+        const newColumn = await response.json();
+        
+        // Add the new column to our local data and re-render
+        this.data.columns.push(newColumn);
+        this.render();
+    } catch (error) {
+        console.error("Failed to add column:", error);
+    }
+  }
+
   getStyles() {
     return `
       <style>
@@ -34,11 +58,13 @@ export class KanbanBoard extends HTMLElement {
           display: flex;
           gap: 16px;
           overflow-x: auto;
+          align-items: flex-start; /* Keeps columns from stretching vertically */
         }
         .column {
           background-color: #ebecf0;
           border-radius: 3px;
           width: 272px;
+          min-width: 272px;
           display: flex;
           flex-direction: column;
           padding: 8px;
@@ -58,40 +84,100 @@ export class KanbanBoard extends HTMLElement {
           margin-bottom: 8px;
           cursor: pointer;
         }
-        .task-card:hover {
-          background-color: #f4f5f7;
+        /* New Styles for Adding Columns */
+        .add-column-wrapper {
+          background-color: rgba(9, 30, 66, 0.08);
+          border-radius: 3px;
+          width: 272px;
+          min-width: 272px;
+          padding: 8px;
+          display: flex;
+          gap: 8px;
+        }
+        input {
+          flex-grow: 1;
+          padding: 6px;
+          border: 2px solid #0079bf;
+          border-radius: 3px;
+          outline: none;
+        }
+        button {
+          background-color: #0079bf;
+          color: white;
+          border: none;
+          padding: 6px 12px;
+          border-radius: 3px;
+          cursor: pointer;
+          font-weight: bold;
+        }
+        button:hover {
+          background-color: #026aa7;
+        }
+        .loading {
+            text-align: center;
+            color: #5e6c84;
+            font-style: italic;
         }
       </style>
     `;
   }
 
-  // 3. Render the HTML structure
   render() {
     const style = this.getStyles();
+
+    if (this.isLoading) {
+        this.shadow.innerHTML = `${style}<div class="loading">Loading board...</div>`;
+        return;
+    }
     
-    // Map through data to build HTML strings
+    // Build the existing columns
     const boardHtml = this.data.columns.map(col => `
-      <div class="column">
+      <div class="column" data-id="${col.id}">
         <div class="column-header">${col.title}</div>
         <div class="task-list">
           ${col.tasks.map(task => `
-            <div class="task-card">${task}</div>
+            <div class="task-card" data-task-id="${task.id}">${task.text}</div>
           `).join('')}
         </div>
       </div>
     `).join('');
 
-    // Inject into Shadow DOM
+    // 3. Inject HTML including the new "Add Column" section at the end
     this.shadow.innerHTML = `
       ${style}
       <div class="board">
         ${boardHtml}
+        
+        <div class="add-column-wrapper">
+            <input type="text" id="new-column-input" placeholder="Enter list title..." />
+            <button id="add-column-btn">Add</button>
+        </div>
       </div>
     `;
+
+    // 4. Attach Event Listeners
+    this.attachEventListeners();
+  }
+
+  attachEventListeners() {
+    const btn = this.shadow.getElementById('add-column-btn');
+    const input = this.shadow.getElementById('new-column-input');
+
+    // Handle Button Click
+    btn.addEventListener('click', () => {
+        const title = input.value.trim();
+        if (title !== "") {
+            this.addColumn(title);
+        }
+    });
+
+    // Handle "Enter" key press
+    input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            btn.click(); 
+        }
+    });
   }
 }
 
-// Define the custom element tag
 customElements.define('kanban-board', KanbanBoard);
-
-// Using AI to kickstart because i am completely unsure how to begin, and keeps comments intentionally to read through and understand later
