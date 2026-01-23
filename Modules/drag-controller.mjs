@@ -15,9 +15,19 @@ export class DragController {
             width: 0, height: 0, dropZones: []
         };
 
-        this.container.addEventListener('pointerdown', this._onPointerDown.bind(this));
-        window.addEventListener('pointermove', this._onPointerMove.bind(this));
-        window.addEventListener('pointerup', this._onPointerUp.bind(this));
+        // THE FIX: Pre-bind the methods so they share the exact same memory reference
+        this._boundOnPointerDown = this._onPointerDown.bind(this);
+        this._boundOnPointerMove = this._onPointerMove.bind(this);
+        this._boundOnPointerUp = this._onPointerUp.bind(this);
+
+        this._bindEvents();
+    }
+
+    _bindEvents() {
+        // Use the stable references
+        this.container.addEventListener('pointerdown', this._boundOnPointerDown);
+        window.addEventListener('pointermove', this._boundOnPointerMove);
+        window.addEventListener('pointerup', this._boundOnPointerUp);
     }
 
     _onPointerDown(e) {
@@ -161,5 +171,22 @@ export class DragController {
         state.isDragging = false;
         state.draggedEl = null;
         state.ghostEl = null;
+    }
+
+    destroy() {
+        // 1. Remove all listeners from the global window object
+        this.container.removeEventListener('pointerdown', this._boundOnPointerDown);
+        window.removeEventListener('pointermove', this._boundOnPointerMove);
+        window.removeEventListener('pointerup', this._boundOnPointerUp);
+
+        // 2. Kill any active animation loops
+        if (this.state.animFrameId) {
+            cancelAnimationFrame(this.state.animFrameId);
+        }
+
+        // 3. Remove any lingering ghost DOM nodes if destroyed mid-drag
+        if (this.state.ghostEl) {
+            this.state.ghostEl.remove();
+        }
     }
 }

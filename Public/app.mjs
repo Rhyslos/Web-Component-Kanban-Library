@@ -31,6 +31,18 @@ export class KanbanBoard extends HTMLElement {
     });
   }
 
+  disconnectedCallback() {
+    // 1. Kill the Physics Engine and Window Listeners
+    if (this.dragController) {
+        this.dragController.destroy();
+    }
+
+    // 2. Kill the ResizeObserver
+    if (this.resizeObserver) {
+        this.resizeObserver.disconnect();
+    }
+  }
+
   async loadData() {
     try {
         this.data = await api.getBoard();
