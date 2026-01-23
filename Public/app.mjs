@@ -36,18 +36,40 @@ export class KanbanBoard extends HTMLElement {
         this.data = await api.getBoard();
         this.isLoading = false;
 
-        // THE FIX: We removed 'this.activeCells.clear()' from here.
-        // Now it only ADDS to memory, it never deletes.
+        // Count previous active cells to detect grid structural changes
+        const previousCellCount = this.activeCells.size;
+
+        // Update grid memory
         if (this.data.columns.length > 0 && this.data.swimlanes.length > 0) {
             this.activeCells.add(`${this.data.columns[0].id}-${this.data.swimlanes[0].id}`);
         }
         this.data.tasks.forEach(t => this.activeCells.add(`${t.colId}-${t.swimId}`));
 
-        this.render(); 
+        // THE DIFFING LOGIC:
+        // If the number of lists changed, we MUST redraw the grid.
+        // If the number is the same (meaning only tasks moved), just update data.
+        if (this.activeCells.size !== previousCellCount || !this.shadow.querySelector('.board-container')) {
+            this.render(); // Heavy DOM operation
+        } else {
+            this.updateComponents(); // Ultra-fast data injection
+        }
+
     } catch (error) { console.error("Failed to load:", error); }
   }
 
-  // INSIDE app.mjs
+  // Fast-Path: Pass new data to existing DOM elements
+  updateComponents() {
+    const listElements = this.shadow.querySelectorAll('kanban-list');
+    listElements.forEach(listEl => {
+        const colId = parseInt(listEl.getAttribute('data-col-id'));
+        const swimId = parseInt(listEl.getAttribute('data-swim-id'));
+        
+        listEl.data = {
+            column: this.data.columns.find(c => c.id === colId),
+            tasks: this.data.tasks.filter(t => t.colId === colId && t.swimId === swimId)
+        };
+    });
+  }
 
   async handleAddList(colIndex, swimIndex) {
     let colId, swimId;
