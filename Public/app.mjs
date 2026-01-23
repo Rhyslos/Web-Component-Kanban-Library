@@ -1,5 +1,5 @@
 /**
- * app.mjs (The Main Board Component)
+ * Public/app.mjs (The Strict Adjacency Grid)
  */
 import { api } from '/modules/kanban-service.mjs';
 import { DragController } from '/modules/drag-controller.mjs';
@@ -11,45 +11,69 @@ export class KanbanBoard extends HTMLElement {
     this.shadow = this.attachShadow({ mode: "open" });
     this.data = { columns: [], swimlanes: [], tasks: [] };
     this.isLoading = true;
-    this.resizeObserver = null; 
+    this.activeCells = new Set(); 
   }
 
   connectedCallback() {
     this.render();
     this.loadData();
 
-    // 1. Listen for data creation from child components
     this.shadow.addEventListener('task-added', (e) => {
-        // Defaulting to swimlane 1 for now, until Y-axis UI is fully mapped
-        this.handleAddTask(e.detail.colId, 1, e.detail.text); 
+        const swimId = e.target.getAttribute('data-swim-id') ? parseInt(e.target.getAttribute('data-swim-id')) : this.data.swimlanes[0].id;
+        this.handleAddTask(e.detail.colId, swimId, e.detail.text); 
     });
 
-    // 2. Initialize the 60fps Physics Engine
     this.dragController = new DragController(this.shadow, {
-        onDrop: (taskId, newColId) => {
-            api.moveTask(taskId, newColId, 1);
+        onDrop: (taskId, newColId, newSwimId) => {
+            api.moveTask(taskId, newColId, newSwimId);
             this.loadData();
         }
     });
   }
 
-  // --- API STATE MANAGEMENT ---
   async loadData() {
     try {
         this.data = await api.getBoard();
         this.isLoading = false;
+
+        // THE FIX: We removed 'this.activeCells.clear()' from here.
+        // Now it only ADDS to memory, it never deletes.
+        if (this.data.columns.length > 0 && this.data.swimlanes.length > 0) {
+            this.activeCells.add(`${this.data.columns[0].id}-${this.data.swimlanes[0].id}`);
+        }
+        this.data.tasks.forEach(t => this.activeCells.add(`${t.colId}-${t.swimId}`));
+
         this.render(); 
     } catch (error) { console.error("Failed to load:", error); }
   }
 
-  async handleAddColumn(title) {
-    await api.createColumn(title);
-    this.loadData(); 
-  }
+  // INSIDE app.mjs
 
-  async handleAddSwimlane(title) {
-    await api.createSwimlane(title);
-    this.loadData();
+  async handleAddList(colIndex, swimIndex) {
+    let colId, swimId;
+
+    if (colIndex >= this.data.columns.length) {
+        const newCol = await api.createColumn('New List');
+        colId = newCol.id;
+    } else {
+        colId = this.data.columns[colIndex].id;
+    }
+
+    if (swimIndex >= this.data.swimlanes.length) {
+        const newSwim = await api.createSwimlane('Main Lane');
+        swimId = newSwim.id;
+    } else {
+        swimId = this.data.swimlanes[swimIndex].id;
+    }
+
+    // THE FIX: Fetch the updated database first
+    this.data = await api.getBoard(); 
+
+    // Then, lock the new cell into memory
+    this.activeCells.add(`${colId}-${swimId}`);
+
+    // Finally, render the UI directly
+    this.render(); 
   }
 
   async handleAddTask(colId, swimId, text) {
@@ -57,137 +81,142 @@ export class KanbanBoard extends HTMLElement {
     this.loadData();
   }
 
-  // --- GRID STYLES ---
+  // --- STYLES (Unchanged) ---
   getStyles() {
-    const colCount = this.data.columns.length;
-    const swimCount = Math.max(1, this.data.swimlanes.length); 
+    const totalCols = this.data.columns.length + 1; 
+    const totalSwims = Math.max(1, this.data.swimlanes.length) + 1; 
 
     return `
       <style>
-        :host { display: block; font-family: sans-serif; height: 100%; box-sizing: border-box; }
+  :host { 
+      display: block; 
+      font-family: sans-serif; 
+      height: 100%; 
+      box-sizing: border-box; 
+      
+      /* Prevents highlight on the board background */
+      user-select: none; 
+      -webkit-user-select: none; 
+  }
         
         .board-container { 
             width: 100%; height: 100%; overflow: auto;
             background-color: #f4f5f7; padding: 24px; 
             display: grid; 
-            /* Grid defines exact space for existing columns + 1 space for the ghost column */
-            grid-template-columns: repeat(${colCount}, 272px) 272px; 
-            grid-template-rows: repeat(${swimCount}, max-content) max-content; 
+            grid-template-columns: repeat(${totalCols}, 272px); 
+            grid-template-rows: repeat(${totalSwims}, max-content); 
             gap: 16px; 
             align-items: start;
         }
 
-        /* The Ghost Boxes */
-        .add-zone {
-            border: 2px dashed #b3bac5; border-radius: 4px; color: #6b778c; box-sizing: border-box;
-            display: flex; align-items: center; justify-content: center; font-weight: bold; 
-            opacity: 0.5; transition: opacity 0.2s, background-color 0.2s; cursor: pointer;
-            min-height: 80px; /* Base size before ResizeObserver kicks in */
+        .invisible-zone {
+            display: flex; align-items: center; justify-content: center; 
+            font-weight: bold; color: #6b778c; cursor: pointer;
+            min-height: 80px; align-self: stretch;
+            opacity: 0; transition: opacity 0.2s, background-color 0.2s; border-radius: 6px;
         }
-        .add-zone:hover { opacity: 1; background-color: rgba(9,30,66,.08); color: #172b4d; border-color: #172b4d; }
+
+        .invisible-zone:hover { opacity: 1; background-color: rgba(9,30,66,.08); color: #172b4d; }
+        
+        /* Dead zones have no pointer events so they cannot be clicked or hovered */
+        .dead-zone { pointer-events: none; } 
       </style>
     `;
   }
 
-  // --- RENDERING ---
+  // --- RENDERING WITH ADJACENCY MATRIX ---
   render() {
     const style = this.getStyles();
     if (this.isLoading) { this.shadow.innerHTML = `${style}<div>Loading...</div>`; return; }
 
     const colCount = this.data.columns.length;
+    const swimCount = this.data.swimlanes.length;
 
-    // STATE 1: Empty Board
     if (colCount === 0) {
-        this.shadow.innerHTML = `
-            ${style}
-            <div class="board-container">
-                <div class="add-zone" id="first-col-btn" style="grid-column: 1; grid-row: 1;">+ Create First List</div>
-            </div>
-        `;
-        this.shadow.getElementById('first-col-btn').addEventListener('click', () => this.handleAddColumn('New Column'));
+        this.shadow.innerHTML = `${style}<div class="board-container"><div class="invisible-zone" id="first-col-btn" style="grid-column: 1; grid-row: 1; opacity: 1;">+ Create List</div></div>`;
+        this.shadow.getElementById('first-col-btn').addEventListener('click', () => this.handleAddList(0, 0));
         return;
     }
 
-    // STATE 2: Populated Grid
-    // 1. Generate the Lists
-    let gridHtml = this.data.columns.map((col, xIndex) => `
-        <kanban-list 
-            class="list-component"
-            data-col-index="${xIndex + 1}"
-            style="grid-column: ${xIndex + 1}; grid-row: 1;"
-        ></kanban-list>
-    `).join('');
+    let gridHtml = '';
+    const totalCols = colCount + 1;
+    const totalSwims = swimCount + 1;
 
-    // 2. Generate the Right-Side Ghost Boxes (One for each row)
-    // We put it in the (colCount + 1) column. 
-    gridHtml += `
-        <div class="add-zone right-ghost" id="add-col-btn" style="grid-column: ${colCount + 1}; grid-row: 1;">
-            + Add List
-        </div>
-    `;
-
-    // 3. Generate the Bottom-Side Ghost Boxes (Underneath each column)
-    this.data.columns.forEach((col, xIndex) => {
-        gridHtml += `
-            <div class="add-zone bottom-ghost" data-target-col="${xIndex + 1}" style="grid-column: ${xIndex + 1}; grid-row: 2;">
-                + Add Swimlane
-            </div>
-        `;
-    });
-
-    this.shadow.innerHTML = `${style}<div class="board-container">${gridHtml}</div>`;
-    
-    // Hydrate Sub-Components with Data
-    const listElements = this.shadow.querySelectorAll('kanban-list');
-    listElements.forEach((el, index) => {
-        const colData = this.data.columns[index];
-        el.data = {
-            column: colData,
-            tasks: this.data.tasks.filter(t => t.colId === colData.id)
-        };
-    });
-
-    // Attach Event Listeners to Ghosts
-    const addColBtn = this.shadow.getElementById('add-col-btn');
-    if (addColBtn) addColBtn.addEventListener('click', () => this.handleAddColumn('New Column'));
-
-    const bottomGhosts = this.shadow.querySelectorAll('.bottom-ghost');
-    bottomGhosts.forEach(ghost => ghost.addEventListener('click', () => this.handleAddSwimlane('New Swimlane')));
-
-    // Boot up the Sizing Physics
-    this.attachSizingPhysics();
-  }
-
-  // --- SIZING PHYSICS (The Magic Ghost Sizer) ---
-  attachSizingPhysics() {
-    // Disconnect old observer to prevent memory leaks
-    if (this.resizeObserver) this.resizeObserver.disconnect();
-
-    this.resizeObserver = new ResizeObserver(entries => {
-        for (let entry of entries) {
-            // Get the exact dimensions of the list that just changed size
-            const listHeight = entry.contentRect.height;
-            const colIndex = parseInt(entry.target.getAttribute('data-col-index'));
-
-            // Find the bottom ghost directly underneath this specific list and match its width
-            const bottomGhost = this.shadow.querySelector(`.bottom-ghost[data-target-col="${colIndex}"]`);
-            if (bottomGhost) {
-                bottomGhost.style.width = `${entry.contentRect.width}px`;
+    // 1. Map existing lists by their X/Y indices so we can easily check neighbors
+    const activeIndices = new Set();
+    for (let y = 0; y < swimCount; y++) {
+        for (let x = 0; x < colCount; x++) {
+            const col = this.data.columns[x];
+            const swim = this.data.swimlanes[y];
+            if (col && swim && this.activeCells.has(`${col.id}-${swim.id}`)) {
+                activeIndices.add(`${x}-${y}`);
             }
+        }
+    }
 
-            // If this is the LAST list in the row, match the Right-Ghost height to this list
-            if (colIndex === this.data.columns.length) {
-                const rightGhost = this.shadow.querySelector('.right-ghost');
-                if (rightGhost) {
-                    rightGhost.style.height = `${listHeight}px`;
+    // 2. Loop the entire grid
+    for (let y = 0; y < totalSwims; y++) {
+        for (let x = 0; x < totalCols; x++) {
+            const isPopulated = activeIndices.has(`${x}-${y}`);
+            const gridCoords = `grid-column: ${x + 1}; grid-row: ${y + 1};`;
+
+            if (isPopulated) {
+                // Render the real list
+                const col = this.data.columns[x];
+                const swim = this.data.swimlanes[y];
+                gridHtml += `
+                    <kanban-list 
+                        class="list-component"
+                        data-col-index="${x + 1}"
+                        data-col-id="${col.id}"
+                        data-swim-id="${swim.id}" 
+                        style="${gridCoords}"
+                    ></kanban-list>
+                `;
+            } else {
+                // 3. THE FIX: Check if this empty space touches an active list (Top, Bottom, Left, or Right)
+                const isAdjacent = 
+                    activeIndices.has(`${x - 1}-${y}`) || // Left
+                    activeIndices.has(`${x + 1}-${y}`) || // Right
+                    activeIndices.has(`${x}-${y - 1}`) || // Top
+                    activeIndices.has(`${x}-${y + 1}`);   // Bottom
+
+                if (isAdjacent) {
+                    // Valid drop zone (directly next to or below a list)
+                    gridHtml += `
+                        <div class="invisible-zone add-list-btn" data-x="${x}" data-y="${y}" style="${gridCoords}">
+                            + Add List
+                        </div>
+                    `;
+                } else {
+                    // Invalid zone (diagonal). Render an empty, unclickable spacer.
+                    gridHtml += `<div class="dead-zone" style="${gridCoords}"></div>`;
                 }
             }
         }
+    }
+
+    this.shadow.innerHTML = `${style}<div class="board-container">${gridHtml}</div>`;
+    
+    // Hydrate
+    const listElements = this.shadow.querySelectorAll('kanban-list');
+    listElements.forEach(listEl => {
+        const colId = parseInt(listEl.getAttribute('data-col-id'));
+        const swimId = parseInt(listEl.getAttribute('data-swim-id'));
+        listEl.data = {
+            column: this.data.columns.find(c => c.id === colId),
+            tasks: this.data.tasks.filter(t => t.colId === colId && t.swimId === swimId)
+        };
     });
 
-    // Start observing every list
-    this.shadow.querySelectorAll('kanban-list').forEach(list => {
-        this.resizeObserver.observe(list);
+    // Attach Listeners
+    const ghostZones = this.shadow.querySelectorAll('.add-list-btn');
+    ghostZones.forEach(zone => {
+        zone.addEventListener('click', (e) => {
+            const x = parseInt(e.target.getAttribute('data-x'));
+            const y = parseInt(e.target.getAttribute('data-y'));
+            this.handleAddList(x, y);
+        });
     });
   }
 }
