@@ -1,251 +1,193 @@
+/**
+ * app.mjs (The Main Board Component)
+ */
+import { api } from '/modules/kanban-service.mjs';
+import { DragController } from '/modules/drag-controller.mjs';
+import '/modules/kanban-list.mjs';
+
 export class KanbanBoard extends HTMLElement {
   constructor() {
     super();
     this.shadow = this.attachShadow({ mode: "open" });
-    this.data = { columns: [] };
+    this.data = { columns: [], swimlanes: [], tasks: [] };
     this.isLoading = true;
+    this.resizeObserver = null; 
   }
 
   connectedCallback() {
     this.render();
-    this.fetchBoardData();
+    this.loadData();
+
+    // 1. Listen for data creation from child components
+    this.shadow.addEventListener('task-added', (e) => {
+        // Defaulting to swimlane 1 for now, until Y-axis UI is fully mapped
+        this.handleAddTask(e.detail.colId, 1, e.detail.text); 
+    });
+
+    // 2. Initialize the 60fps Physics Engine
+    this.dragController = new DragController(this.shadow, {
+        onDrop: (taskId, newColId) => {
+            api.moveTask(taskId, newColId, 1);
+            this.loadData();
+        }
+    });
   }
 
-  // --- 1. EXISTING API CALLS ---
-  async fetchBoardData() {
+  // --- API STATE MANAGEMENT ---
+  async loadData() {
     try {
-        const response = await fetch('/api/board');
-        this.data = await response.json();
+        this.data = await api.getBoard();
         this.isLoading = false;
         this.render(); 
-    } catch (error) { console.error("Failed to load board:", error); }
+    } catch (error) { console.error("Failed to load:", error); }
   }
 
-  async addColumn(title) {
-    try {
-        const response = await fetch('/api/columns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: title }) });
-        const newColumn = await response.json();
-        this.data.columns.push(newColumn);
-        this.render();
-    } catch (error) { console.error("Failed to add column:", error); }
+  async handleAddColumn(title) {
+    await api.createColumn(title);
+    this.loadData(); 
   }
 
-  async addTask(columnId, text) {
-    try {
-        const response = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ columnId: columnId, taskText: text }) });
-        const newTask = await response.json();
-        const column = this.data.columns.find(col => col.id === columnId);
-        column.tasks.push(newTask);
-        this.render();
-    } catch (error) { console.error("Failed to add task:", error); }
+  async handleAddSwimlane(title) {
+    await api.createSwimlane(title);
+    this.loadData();
   }
 
-  async moveTask(taskId, newColumnId) {
-    try {
-        const response = await fetch(`/api/tasks/${taskId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newColumnId: newColumnId }) });
-        if (response.ok) this.fetchBoardData(); 
-    } catch (error) { console.error("Failed to move task:", error); }
+  async handleAddTask(colId, swimId, text) {
+    await api.createTask(colId, swimId, text);
+    this.loadData();
   }
 
-  // --- 2. RENDERING ---
+  // --- GRID STYLES ---
   getStyles() {
+    const colCount = this.data.columns.length;
+    const swimCount = Math.max(1, this.data.swimlanes.length); 
+
     return `
       <style>
-        :host { display: block; font-family: sans-serif; background-color: #f4f5f7; padding: 20px; border-radius: 8px; user-select: none; }
-        .board { display: flex; gap: 16px; overflow-x: auto; align-items: flex-start; }
-        .column { background-color: #ebecf0; border-radius: 3px; width: 272px; min-width: 272px; display: flex; flex-direction: column; padding: 8px; transition: background-color 0.2s; }
-        .column-header { font-weight: bold; padding-bottom: 8px; text-transform: uppercase; font-size: 0.85rem; color: #5e6c84; pointer-events: none; }
-        .task-card { background-color: #fff; border-radius: 3px; box-shadow: 0 1px 0 rgba(9,30,66,.25); padding: 8px; margin-bottom: 8px; cursor: grab; }
-        .task-card:hover { background-color: #f4f5f7; }
+        :host { display: block; font-family: sans-serif; height: 100%; box-sizing: border-box; }
         
-        /* UPDATED GHOST CARD CSS */
-        .dragging-clone {
-            position: fixed;
-            top: 0; /* Anchor to top left */
-            left: 0;
-            pointer-events: none;
-            z-index: 9999;
-            background-color: #fff;
-            border-radius: 3px;
-            box-shadow: 0 12px 24px rgba(9,30,66,.25);
-            padding: 8px;
-            cursor: grabbing;
-            will-change: transform; /* Tells the browser to use the GPU */
+        .board-container { 
+            width: 100%; height: 100%; overflow: auto;
+            background-color: #f4f5f7; padding: 24px; 
+            display: grid; 
+            /* Grid defines exact space for existing columns + 1 space for the ghost column */
+            grid-template-columns: repeat(${colCount}, 272px) 272px; 
+            grid-template-rows: repeat(${swimCount}, max-content) max-content; 
+            gap: 16px; 
+            align-items: start;
         }
 
-        .placeholder { opacity: 0.2; }
-        .column-hover { background-color: rgba(9, 30, 66, 0.08); }
-        .task-list { min-height: 10px; }
-        .add-card-btn { color: #5e6c84; padding: 8px; cursor: pointer; border-radius: 3px; background: none; border: none; text-align: left; font-size: 1rem; }
-        .add-card-btn:hover { background-color: rgba(9,30,66,.08); color: #172b4d; }
-        .add-card-form { display: none; flex-direction: column; gap: 8px; }
-        .add-card-input { padding: 8px; border: none; border-radius: 3px; box-shadow: 0 1px 0 rgba(9,30,66,.25); resize: none; font-family: sans-serif; }
-        .add-card-actions { display: flex; gap: 8px; }
-        .save-card-btn { background-color: #0079bf; color: white; border: none; padding: 6px 12px; border-radius: 3px; cursor: pointer; }
-        .cancel-btn { background: none; border: none; font-size: 1.5rem; color: #6b778c; cursor: pointer; line-height: 1; }
-        .add-column-wrapper { background-color: rgba(9, 30, 66, 0.08); border-radius: 3px; min-width: 272px; padding: 8px; display: flex; gap: 8px; }
-        .add-column-wrapper input { flex-grow: 1; padding: 6px; border: 2px solid #0079bf; border-radius: 3px; }
-        .add-column-wrapper button { background-color: #0079bf; color: white; border: none; padding: 6px 12px; border-radius: 3px; cursor: pointer; }
+        /* The Ghost Boxes */
+        .add-zone {
+            border: 2px dashed #b3bac5; border-radius: 4px; color: #6b778c; box-sizing: border-box;
+            display: flex; align-items: center; justify-content: center; font-weight: bold; 
+            opacity: 0.5; transition: opacity 0.2s, background-color 0.2s; cursor: pointer;
+            min-height: 80px; /* Base size before ResizeObserver kicks in */
+        }
+        .add-zone:hover { opacity: 1; background-color: rgba(9,30,66,.08); color: #172b4d; border-color: #172b4d; }
       </style>
     `;
   }
 
+  // --- RENDERING ---
   render() {
     const style = this.getStyles();
     if (this.isLoading) { this.shadow.innerHTML = `${style}<div>Loading...</div>`; return; }
-    
-    // Notice: Removed draggable="true", we will handle it with custom JS pointers
-    const boardHtml = this.data.columns.map(col => `
-      <div class="column" data-id="${col.id}">
-        <div class="column-header">${col.title}</div>
-        <div class="task-list">
-          ${col.tasks.map(task => `
-            <div class="task-card" data-task-id="${task.id}">${task.text}</div>
-          `).join('')}
-        </div>
-        <button class="add-card-btn">+ Add a card</button>
-        <div class="add-card-form">
-            <textarea class="add-card-input" placeholder="Enter a title for this card..."></textarea>
-            <div class="add-card-actions">
-                <button class="save-card-btn">Add Card</button>
-                <button class="cancel-btn">×</button>
+
+    const colCount = this.data.columns.length;
+
+    // STATE 1: Empty Board
+    if (colCount === 0) {
+        this.shadow.innerHTML = `
+            ${style}
+            <div class="board-container">
+                <div class="add-zone" id="first-col-btn" style="grid-column: 1; grid-row: 1;">+ Create First List</div>
             </div>
-        </div>
-      </div>
+        `;
+        this.shadow.getElementById('first-col-btn').addEventListener('click', () => this.handleAddColumn('New Column'));
+        return;
+    }
+
+    // STATE 2: Populated Grid
+    // 1. Generate the Lists
+    let gridHtml = this.data.columns.map((col, xIndex) => `
+        <kanban-list 
+            class="list-component"
+            data-col-index="${xIndex + 1}"
+            style="grid-column: ${xIndex + 1}; grid-row: 1;"
+        ></kanban-list>
     `).join('');
 
-    this.shadow.innerHTML = `${style}<div class="board">${boardHtml}<div class="add-column-wrapper"><input type="text" id="new-column-input" placeholder="Enter list title..." /><button id="add-column-btn">Add</button></div></div>`;
-    this.attachEventListeners();
+    // 2. Generate the Right-Side Ghost Boxes (One for each row)
+    // We put it in the (colCount + 1) column. 
+    gridHtml += `
+        <div class="add-zone right-ghost" id="add-col-btn" style="grid-column: ${colCount + 1}; grid-row: 1;">
+            + Add List
+        </div>
+    `;
+
+    // 3. Generate the Bottom-Side Ghost Boxes (Underneath each column)
+    this.data.columns.forEach((col, xIndex) => {
+        gridHtml += `
+            <div class="add-zone bottom-ghost" data-target-col="${xIndex + 1}" style="grid-column: ${xIndex + 1}; grid-row: 2;">
+                + Add Swimlane
+            </div>
+        `;
+    });
+
+    this.shadow.innerHTML = `${style}<div class="board-container">${gridHtml}</div>`;
+    
+    // Hydrate Sub-Components with Data
+    const listElements = this.shadow.querySelectorAll('kanban-list');
+    listElements.forEach((el, index) => {
+        const colData = this.data.columns[index];
+        el.data = {
+            column: colData,
+            tasks: this.data.tasks.filter(t => t.colId === colData.id)
+        };
+    });
+
+    // Attach Event Listeners to Ghosts
+    const addColBtn = this.shadow.getElementById('add-col-btn');
+    if (addColBtn) addColBtn.addEventListener('click', () => this.handleAddColumn('New Column'));
+
+    const bottomGhosts = this.shadow.querySelectorAll('.bottom-ghost');
+    bottomGhosts.forEach(ghost => ghost.addEventListener('click', () => this.handleAddSwimlane('New Swimlane')));
+
+    // Boot up the Sizing Physics
+    this.attachSizingPhysics();
   }
 
-  // --- 3. CUSTOM PHYSICS DRAG & DROP ---
-  // --- 3. CUSTOM PHYSICS DRAG & DROP (OPTIMIZED) ---
-  attachEventListeners() {
-    const addColBtn = this.shadow.getElementById('add-column-btn');
-    const addColInput = this.shadow.getElementById('new-column-input');
-    addColBtn.addEventListener('click', () => { if (addColInput.value.trim()) this.addColumn(addColInput.value.trim()); });
+  // --- SIZING PHYSICS (The Magic Ghost Sizer) ---
+  attachSizingPhysics() {
+    // Disconnect old observer to prevent memory leaks
+    if (this.resizeObserver) this.resizeObserver.disconnect();
 
-    let isDragging = false;
-    let draggedCard = null;
-    let ghostCard = null;
-    let animationFrameId = null; 
+    this.resizeObserver = new ResizeObserver(entries => {
+        for (let entry of entries) {
+            // Get the exact dimensions of the list that just changed size
+            const listHeight = entry.contentRect.height;
+            const colIndex = parseInt(entry.target.getAttribute('data-col-index'));
 
-    // Physics State
-    let offset = { x: 0, y: 0 }; 
-    let targetX = 0, targetY = 0;   // Where the mouse is
-    let currentX = 0, currentY = 0; // Where the card is
-    let targetTilt = 0, currentTilt = 0;
-    let lastX = 0;
+            // Find the bottom ghost directly underneath this specific list and match its width
+            const bottomGhost = this.shadow.querySelector(`.bottom-ghost[data-target-col="${colIndex}"]`);
+            if (bottomGhost) {
+                bottomGhost.style.width = `${entry.contentRect.width}px`;
+            }
 
-    const columns = this.shadow.querySelectorAll('.column');
-    const allCards = this.shadow.querySelectorAll('.task-card');
-
-    // --- RENDER LOOP (Handles Visuals & Smoothing) ---
-    const updatePhysics = () => {
-        if (!isDragging || !ghostCard) return;
-
-        // 1. Linear Interpolation (Lerp) for buttery smooth movement
-        currentX += (targetX - currentX) * 0.35; // 0.35 is the speed (1 = instant, 0 = no movement)
-        currentY += (targetY - currentY) * 0.35;
-        currentTilt += (targetTilt - currentTilt) * 0.15; // Slower lerp for the tilt rotation
-        
-        // 2. Apply GPU-accelerated transform
-        ghostCard.style.transform = `translate3d(${currentX}px, ${currentY}px, 0) rotate(${currentTilt}deg)`;
-        
-        // 3. Debounced Collision Detection (Only check 1 out of 3 frames to save CPU)
-        if (Math.abs(targetX - currentX) < 1) { 
-            columns.forEach(col => col.classList.remove('column-hover'));
-            const elementsUnderCursor = this.shadow.elementsFromPoint(targetX + offset.x, targetY + offset.y);
-            const hoveredColumn = elementsUnderCursor.find(el => el.classList && el.classList.contains('column'));
-            if (hoveredColumn) hoveredColumn.classList.add('column-hover');
-        }
-
-        animationFrameId = requestAnimationFrame(updatePhysics);
-    };
-
-    allCards.forEach(card => {
-        card.addEventListener('pointerdown', (e) => {
-            isDragging = true;
-            draggedCard = card;
-
-            const rect = card.getBoundingClientRect();
-            offset.x = e.clientX - rect.left;
-            offset.y = e.clientY - rect.top;
-
-            ghostCard = card.cloneNode(true);
-            ghostCard.classList.add('dragging-clone');
-            ghostCard.style.width = `${rect.width}px`;
-            ghostCard.style.transition = 'none'; 
-
-            // Initialize positions
-            targetX = currentX = e.clientX - offset.x;
-            targetY = currentY = e.clientY - offset.y;
-            targetTilt = currentTilt = 0;
-            lastX = e.clientX;
-
-            ghostCard.style.transform = `translate3d(${currentX}px, ${currentY}px, 0) rotate(0deg)`;
-
-            this.shadow.appendChild(ghostCard);
-            draggedCard.classList.add('placeholder');
-
-            animationFrameId = requestAnimationFrame(updatePhysics);
-        });
-    });
-
-    // --- MOUSE MOVE (Only updates targets, zero DOM manipulation) ---
-    window.addEventListener('pointermove', (e) => {
-        if (!isDragging || !ghostCard) return;
-
-        targetX = e.clientX - offset.x;
-        targetY = e.clientY - offset.y;
-
-        // Calculate velocity for the dynamic tilt effect
-        const speedX = e.clientX - lastX;
-        lastX = e.clientX; 
-        targetTilt = Math.max(-10, Math.min(10, speedX * 0.5)); 
-    });
-
-    // --- MOUSE UP ---
-    window.addEventListener('pointerup', (e) => {
-        if (!isDragging) return;
-        cancelAnimationFrame(animationFrameId); 
-
-        const elementsUnderCursor = this.shadow.elementsFromPoint(e.clientX, e.clientY);
-        const hoveredColumn = elementsUnderCursor.find(el => el.classList && el.classList.contains('column'));
-
-        if (hoveredColumn) {
-            const newColumnId = parseInt(hoveredColumn.getAttribute('data-id'));
-            const taskId = parseInt(draggedCard.getAttribute('data-task-id'));
-
-            if (draggedCard.closest('.column').getAttribute('data-id') != newColumnId) {
-                this.moveTask(taskId, newColumnId);
+            // If this is the LAST list in the row, match the Right-Ghost height to this list
+            if (colIndex === this.data.columns.length) {
+                const rightGhost = this.shadow.querySelector('.right-ghost');
+                if (rightGhost) {
+                    rightGhost.style.height = `${listHeight}px`;
+                }
             }
         }
-
-        ghostCard.remove();
-        draggedCard.classList.remove('placeholder');
-        columns.forEach(col => col.classList.remove('column-hover'));
-        
-        isDragging = false;
-        draggedCard = null;
-        ghostCard = null;
     });
 
-    // --- Add Card Logic ---
-    columns.forEach(column => {
-        const colId = parseInt(column.getAttribute('data-id'));
-        const addBtn = column.querySelector('.add-card-btn');
-        const form = column.querySelector('.add-card-form');
-        const input = column.querySelector('.add-card-input');
-        const saveBtn = column.querySelector('.save-card-btn');
-        const cancelBtn = column.querySelector('.cancel-btn');
-
-        addBtn.addEventListener('click', () => { addBtn.style.display = 'none'; form.style.display = 'flex'; input.focus(); });
-        cancelBtn.addEventListener('click', () => { addBtn.style.display = 'block'; form.style.display = 'none'; input.value = ''; });
-        saveBtn.addEventListener('click', () => {
-            const text = input.value.trim();
-            if (text !== "") this.addTask(colId, text);
-        });
+    // Start observing every list
+    this.shadow.querySelectorAll('kanban-list').forEach(list => {
+        this.resizeObserver.observe(list);
     });
   }
 }
