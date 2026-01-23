@@ -23,10 +23,40 @@ export class KanbanBoard extends HTMLElement {
         this.handleAddTask(e.detail.colId, swimId, e.detail.text); 
     });
 
+    // THE FIX: Optimistic UI Physics Engine
     this.dragController = new DragController(this.shadow, {
-        onDrop: (taskId, newColId, newSwimId) => {
-            api.moveTask(taskId, newColId, newSwimId);
-            this.loadData();
+        onDrop: async (taskId, newColId, newSwimId) => {
+            
+            // 1. Find the specific task in our local memory
+            const task = this.data.tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            // 2. Cache the old coordinates in case the internet disconnects
+            const oldColId = task.colId;
+            const oldSwimId = task.swimId;
+
+            // 3. OPTIMISTIC UPDATE: Change the data instantly
+            task.colId = newColId;
+            task.swimId = newSwimId;
+
+            // 4. INSTANT RENDER: Diff the components immediately (0ms delay)
+            this.updateComponents();
+
+            // 5. BACKGROUND SYNC: Silently send the change to the API
+            try {
+                await api.moveTask(taskId, newColId, newSwimId);
+                // Success! The server agrees. No further action needed.
+            } catch (error) {
+                console.error("Network Error: Rolling back UI...", error);
+                
+                // 6. THE ROLLBACK: The server failed, so snap the card back.
+                task.colId = oldColId;
+                task.swimId = oldSwimId;
+                this.updateComponents(); 
+                
+                // Optional: Show a toast/alert to the user
+                alert("Connection lost. Card returned to original position.");
+            }
         }
     });
   }
