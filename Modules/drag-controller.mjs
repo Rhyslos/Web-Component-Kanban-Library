@@ -59,18 +59,22 @@ export class DragController {
         });
 
         // 3. Create the Ghost Clone
-        state.ghostEl = card.cloneNode(true);
+       state.ghostEl = card.cloneNode(true);
     
-    // THE FIX: Added "top: 0; left: 0; margin: 0;" to anchor the physics grid
+    // THE FIX: Removed background, padding, and box-shadow. 
+    // We only apply the pure physics properties (position, width, height, z-index).
     state.ghostEl.style.cssText = `
         position: fixed; top: 0; left: 0; margin: 0;
         pointer-events: none; z-index: 9999;
-        background-color: #fff; border-radius: 3px; 
-        box-shadow: 0 12px 24px rgba(9,30,66,.25); padding: 8px;
         width: ${rect.width}px; height: ${rect.height}px;
-        will-change: transform; font-family: sans-serif;
-        box-sizing: border-box;
+        will-change: transform; box-sizing: border-box;
     `;
+    
+    // Pass the card's data to the clone so it renders its own text and styles
+    state.ghostEl.data = card.data; 
+
+    // Optional Polish: Tilt the card immediately when picked up so it feels "lifted"
+    state.ghostEl.style.transform = `rotate(3deg) scale(1.02)`;
     
     // Pass the card's data to the clone so it renders the text
     state.ghostEl.data = card.data;

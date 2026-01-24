@@ -13,59 +13,82 @@ export class KanbanList extends HTMLElement {
     set data({ column, tasks }) {
         this.column = column;
         this.tasks = tasks || [];
-        
-        // 1. First load: Build the HTML shell
-        if (!this.initialized) {
-            this.renderShell();
-            this.initialized = true;
-        }
-        
-        // 2. Subsequent loads: Only update the text and cards
+        if (!this.initialized) { this.renderShell(); this.initialized = true; }
         this.updateData();
     }
 
     renderShell() {
         this.shadow.innerHTML = `
             <style>
-                :host { display: block; height: 100%; box-sizing: border-box; }
-                .list { background-color: #ebecf0; border-radius: 6px; display: flex; flex-direction: column; max-height: 100%; box-shadow: 0 1px 2px rgba(9,30,66,.15); transition: box-shadow 0.2s ease, background-color 0.2s ease; }
-                .list-header { font-weight: 600; color: #172b4d; padding: 10px 12px; font-size: 0.95rem; }
+                :host { display: block; height: 100%; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+                
+                .list { background-color: #ebecf0; border-radius: 6px; display: flex; flex-direction: column; max-height: 100%; box-shadow: 0 1px 2px rgba(9,30,66,.15); transition: box-shadow 0.2s ease; }
+                
+                /* HEADER STYLING */
+                .header-container { padding: 12px 14px; position: relative; }
+                .list-header { font-weight: 600; color: #172b4d; font-size: 1rem; cursor: pointer; user-select: none; }
+                .header-input { 
+                    display: none; width: 100%; box-sizing: border-box; font-family: inherit; font-size: 1rem; font-weight: 600; color: #172b4d;
+                    padding: 4px 8px; margin: -4px -8px; border-radius: 4px; border: none; outline: 2px solid #0079bf;
+                }
+
                 .task-list { padding: 0 8px; overflow-y: auto; flex-grow: 1; min-height: 4px; }
-                .add-btn { padding: 8px; margin: 2px 8px 8px 8px; cursor: pointer; border: none; background: none; text-align: left; color: #5e6c84; border-radius: 3px; font-size: 0.9rem; }
+                
+                /* BETTER "ADD TASK" TRIGGER */
+                .add-btn { 
+                    display: flex; align-items: center; padding: 10px 12px; margin: 4px 8px 8px 8px; 
+                    cursor: pointer; border: none; background: none; text-align: left; 
+                    color: #5e6c84; border-radius: 4px; font-size: 0.95rem; font-family: inherit;
+                    transition: background-color 0.15s, color 0.15s;
+                }
                 .add-btn:hover { background-color: rgba(9,30,66,.08); color: #172b4d; }
+
+                /* POLISHED FORM UI */
                 .form-container { display: none; padding: 0 8px 8px 8px; flex-direction: column; gap: 8px; }
-                textarea { border: none; border-radius: 3px; padding: 8px; box-shadow: 0 1px 0 rgba(9,30,66,.25); resize: none; font-family: inherit; font-size: 0.9rem; outline: 2px solid #0079bf; outline-offset: -1px; }
-                .save-btn { background-color: #0079bf; color: white; border: none; padding: 6px 12px; border-radius: 3px; cursor: pointer; font-weight: bold; width: fit-content; }
+                .form-input { 
+                    border: none; border-radius: 4px; padding: 10px 12px;
+                    box-shadow: 0 1px 2px rgba(9,30,66,.15); resize: none; font-family: inherit; font-size: 0.95rem; line-height: 1.4;
+                    outline: 2px solid #0079bf; outline-offset: -1px; transition: box-shadow 0.15s;
+                }
+                .form-controls { display: flex; align-items: center; gap: 8px; }
+                .save-btn { background-color: #0079bf; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600; font-family: inherit; transition: background-color 0.1s; }
                 .save-btn:hover { background-color: #026aa7; }
+                .cancel-btn { background: none; border: none; color: #6b778c; font-size: 1.5rem; line-height: 1; cursor: pointer; padding: 0 4px; }
+                .cancel-btn:hover { color: #172b4d; }
             </style>
             <div class="list" data-id="${this.column.id}">
-                <div class="list-header" id="header-text"></div>
+                <div class="header-container">
+                    <div class="list-header" id="header-display" title="Double click to rename"></div>
+                    <input class="header-input" id="header-input" type="text" />
+                </div>
+                
                 <div class="task-list" id="task-container"></div>
                 
-                <button class="add-btn">+ Add a card</button>
-                <div class="form-container">
-                    <textarea placeholder="Enter a title for this card..." rows="3"></textarea>
-                    <button class="save-btn">Add Card</button>
+                <button class="add-btn" id="add-btn">+ Add a card</button>
+                <div class="form-container" id="form-container">
+                    <textarea class="form-input" id="form-input" placeholder="Enter a title for this card..." rows="3"></textarea>
+                    <div class="form-controls">
+                        <button class="save-btn" id="save-btn">Add Card</button>
+                        <button class="cancel-btn" id="cancel-btn">×</button>
+                    </div>
                 </div>
             </div>
         `;
-        this._attachFormEvents();
+        this._attachEvents();
     }
 
-    // THE DIFFING ALGORITHM
     updateData() {
-        // 1. Update Header Text without touching the DOM
-        this.shadow.getElementById('header-text').textContent = this.column.title;
+        // Safe Update (Only updates DOM if text changed to avoid breaking input focus)
+        const display = this.shadow.getElementById('header-display');
+        if (display.textContent !== this.column.title) {
+            display.textContent = this.column.title;
+        }
 
         const container = this.shadow.getElementById('task-container');
         const existingCards = container.querySelectorAll('kanban-card');
 
-        // 2. Update existing cards with new data
-        for (let i = 0; i < Math.min(this.tasks.length, existingCards.length); i++) {
-            existingCards[i].data = this.tasks[i];
-        }
+        for (let i = 0; i < Math.min(this.tasks.length, existingCards.length); i++) existingCards[i].data = this.tasks[i];
 
-        // 3. If there are MORE new tasks than existing cards, create new elements
         if (this.tasks.length > existingCards.length) {
             for (let i = existingCards.length; i < this.tasks.length; i++) {
                 const newCard = document.createElement('kanban-card');
@@ -74,32 +97,59 @@ export class KanbanList extends HTMLElement {
             }
         }
 
-        // 4. If there are FEWER new tasks than existing cards, remove the excess
         if (this.tasks.length < existingCards.length) {
-            for (let i = existingCards.length - 1; i >= this.tasks.length; i--) {
-                container.removeChild(existingCards[i]);
-            }
+            for (let i = existingCards.length - 1; i >= this.tasks.length; i--) container.removeChild(existingCards[i]);
         }
     }
 
-    _attachFormEvents() {
-        // (This code remains exactly the same as your previous version)
-        const btn = this.shadow.querySelector('.add-btn');
-        const form = this.shadow.querySelector('.form-container');
-        const saveBtn = this.shadow.querySelector('.save-btn');
-        const input = this.shadow.querySelector('textarea');
+    _attachEvents() {
+        // --- 1. LIST RENAME EVENTS ---
+        const display = this.shadow.getElementById('header-display');
+        const input = this.shadow.getElementById('header-input');
 
-        btn.addEventListener('click', () => { btn.style.display = 'none'; form.style.display = 'flex'; input.focus(); });
+        display.addEventListener('dblclick', () => {
+            display.style.display = 'none';
+            input.style.display = 'block';
+            input.value = this.column.title;
+            input.focus();
+            input.select();
+        });
 
-        const submitForm = () => {
-            if (input.value.trim() !== '') {
-                this.dispatchEvent(new CustomEvent('task-added', { detail: { text: input.value, colId: this.column.id }, bubbles: true, composed: true }));
+        const saveHeader = () => {
+            const newTitle = input.value.trim();
+            if (newTitle !== '' && newTitle !== this.column.title) {
+                this.dispatchEvent(new CustomEvent('list-renamed', { detail: { colId: this.column.id, newTitle: newTitle }, bubbles: true, composed: true }));
             }
-            btn.style.display = 'block'; form.style.display = 'none'; input.value = '';
+            display.style.display = 'block';
+            input.style.display = 'none';
         };
 
-        saveBtn.addEventListener('click', submitForm);
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitForm(); } });
+        input.addEventListener('blur', saveHeader);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { display.style.display = 'block'; input.style.display = 'none'; } });
+
+
+        // --- 2. ADD TASK EVENTS ---
+        const btn = this.shadow.getElementById('add-btn');
+        const form = this.shadow.getElementById('form-container');
+        const saveBtn = this.shadow.getElementById('save-btn');
+        const cancelBtn = this.shadow.getElementById('cancel-btn');
+        const formInput = this.shadow.getElementById('form-input');
+
+        const openForm = () => { btn.style.display = 'none'; form.style.display = 'flex'; formInput.focus(); };
+        const closeForm = () => { btn.style.display = 'flex'; form.style.display = 'none'; formInput.value = ''; };
+
+        btn.addEventListener('click', openForm);
+        cancelBtn.addEventListener('click', closeForm);
+
+        const submitTask = () => {
+            if (formInput.value.trim() !== '') {
+                this.dispatchEvent(new CustomEvent('task-added', { detail: { text: formInput.value, colId: this.column.id }, bubbles: true, composed: true }));
+            }
+            closeForm();
+        };
+
+        saveBtn.addEventListener('click', submitTask);
+        formInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitTask(); } if (e.key === 'Escape') closeForm(); });
     }
 }
 customElements.define('kanban-list', KanbanList);

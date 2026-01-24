@@ -1,5 +1,5 @@
 /**
- * Public/app.mjs (The Strict Adjacency Grid)
+ * Public/app.mjs (The Main Board Component)
  */
 import { api } from '/modules/kanban-service.mjs';
 import { DragController } from '/modules/drag-controller.mjs';
@@ -11,101 +11,105 @@ export class KanbanBoard extends HTMLElement {
     this.shadow = this.attachShadow({ mode: "open" });
     this.data = { columns: [], swimlanes: [], tasks: [] };
     this.isLoading = true;
+    this.resizeObserver = null; 
     this.activeCells = new Set(); 
   }
 
+  // --- 1. LIFECYCLE MANAGEMENT ---
   connectedCallback() {
     this.render();
     this.loadData();
 
+    // Listener: Add Task
     this.shadow.addEventListener('task-added', (e) => {
         const swimId = e.target.getAttribute('data-swim-id') ? parseInt(e.target.getAttribute('data-swim-id')) : this.data.swimlanes[0].id;
         this.handleAddTask(e.detail.colId, swimId, e.detail.text); 
     });
 
-    // THE FIX: Optimistic UI Physics Engine
+    // Listener: Rename Task (Optimistic UI)
+    this.shadow.addEventListener('task-renamed', async (e) => {
+        const { taskId, newText } = e.detail;
+        const task = this.data.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.text = newText;
+            this.updateComponents(); // Instant UI update
+            // await api.updateTaskText(taskId, newText); // TODO: Add to API
+        }
+    });
+
+    // Listener: Rename List (Optimistic UI)
+    this.shadow.addEventListener('list-renamed', async (e) => {
+        const { colId, newTitle } = e.detail;
+        const column = this.data.columns.find(c => c.id === colId);
+        if (column) {
+            column.title = newTitle;
+            this.updateComponents(); // Instant UI update
+            // await api.updateColumnTitle(colId, newTitle); // TODO: Add to API
+        }
+    });
+
+    // Physics Engine: 60fps Drag & Drop with Optimistic UI
     this.dragController = new DragController(this.shadow, {
         onDrop: async (taskId, newColId, newSwimId) => {
-            
-            // 1. Find the specific task in our local memory
             const task = this.data.tasks.find(t => t.id === taskId);
             if (!task) return;
 
-            // 2. Cache the old coordinates in case the internet disconnects
             const oldColId = task.colId;
             const oldSwimId = task.swimId;
 
-            // 3. OPTIMISTIC UPDATE: Change the data instantly
+            // 1. Instant UI Update
             task.colId = newColId;
             task.swimId = newSwimId;
-
-            // 4. INSTANT RENDER: Diff the components immediately (0ms delay)
             this.updateComponents();
 
-            // 5. BACKGROUND SYNC: Silently send the change to the API
+            // 2. Background Sync
             try {
                 await api.moveTask(taskId, newColId, newSwimId);
-                // Success! The server agrees. No further action needed.
             } catch (error) {
                 console.error("Network Error: Rolling back UI...", error);
-                
-                // 6. THE ROLLBACK: The server failed, so snap the card back.
                 task.colId = oldColId;
                 task.swimId = oldSwimId;
                 this.updateComponents(); 
-                
-                // Optional: Show a toast/alert to the user
-                alert("Connection lost. Card returned to original position.");
             }
         }
     });
   }
 
+  // Memory Leak Prevention: Cleans up when user leaves the page
   disconnectedCallback() {
-    // 1. Kill the Physics Engine and Window Listeners
-    if (this.dragController) {
-        this.dragController.destroy();
-    }
-
-    // 2. Kill the ResizeObserver
-    if (this.resizeObserver) {
-        this.resizeObserver.disconnect();
-    }
+    if (this.dragController) this.dragController.destroy();
+    if (this.resizeObserver) this.resizeObserver.disconnect();
   }
 
+  // --- 2. DATA SYNCHRONIZATION ---
   async loadData() {
     try {
         this.data = await api.getBoard();
         this.isLoading = false;
 
-        // Count previous active cells to detect grid structural changes
         const previousCellCount = this.activeCells.size;
 
-        // Update grid memory
         if (this.data.columns.length > 0 && this.data.swimlanes.length > 0) {
             this.activeCells.add(`${this.data.columns[0].id}-${this.data.swimlanes[0].id}`);
         }
         this.data.tasks.forEach(t => this.activeCells.add(`${t.colId}-${t.swimId}`));
 
-        // THE DIFFING LOGIC:
-        // If the number of lists changed, we MUST redraw the grid.
-        // If the number is the same (meaning only tasks moved), just update data.
+        // Diffing Algorithm: Only redraw the whole DOM if the grid size changed.
         if (this.activeCells.size !== previousCellCount || !this.shadow.querySelector('.board-container')) {
-            this.render(); // Heavy DOM operation
+            this.render(); 
         } else {
-            this.updateComponents(); // Ultra-fast data injection
+            this.updateComponents(); // Ultra-fast sub-component update
         }
 
     } catch (error) { console.error("Failed to load:", error); }
   }
 
-  // Fast-Path: Pass new data to existing DOM elements
+  // Fast-Path Hydration
   updateComponents() {
     const listElements = this.shadow.querySelectorAll('kanban-list');
     listElements.forEach(listEl => {
         const colId = parseInt(listEl.getAttribute('data-col-id'));
         const swimId = parseInt(listEl.getAttribute('data-swim-id'));
-        
         listEl.data = {
             column: this.data.columns.find(c => c.id === colId),
             tasks: this.data.tasks.filter(t => t.colId === colId && t.swimId === swimId)
@@ -113,6 +117,7 @@ export class KanbanBoard extends HTMLElement {
     });
   }
 
+  // --- 3. API ACTIONS ---
   async handleAddList(colIndex, swimIndex) {
     let colId, swimId;
 
@@ -130,13 +135,8 @@ export class KanbanBoard extends HTMLElement {
         swimId = this.data.swimlanes[swimIndex].id;
     }
 
-    // THE FIX: Fetch the updated database first
     this.data = await api.getBoard(); 
-
-    // Then, lock the new cell into memory
     this.activeCells.add(`${colId}-${swimId}`);
-
-    // Finally, render the UI directly
     this.render(); 
   }
 
@@ -145,23 +145,17 @@ export class KanbanBoard extends HTMLElement {
     this.loadData();
   }
 
-  // --- STYLES (Unchanged) ---
+  // --- 4. STYLES (Clean UI & Grid) ---
   getStyles() {
     const totalCols = this.data.columns.length + 1; 
     const totalSwims = Math.max(1, this.data.swimlanes.length) + 1; 
 
     return `
       <style>
-  :host { 
-      display: block; 
-      font-family: sans-serif; 
-      height: 100%; 
-      box-sizing: border-box; 
-      
-      /* Prevents highlight on the board background */
-      user-select: none; 
-      -webkit-user-select: none; 
-  }
+        :host { 
+            display: block; font-family: sans-serif; height: 100%; box-sizing: border-box; 
+            user-select: none; -webkit-user-select: none; /* Prevents blue text highlight during drag */
+        }
         
         .board-container { 
             width: 100%; height: 100%; overflow: auto;
@@ -169,8 +163,7 @@ export class KanbanBoard extends HTMLElement {
             display: grid; 
             grid-template-columns: repeat(${totalCols}, 272px); 
             grid-template-rows: repeat(${totalSwims}, max-content); 
-            gap: 16px; 
-            align-items: start;
+            gap: 16px; align-items: start;
         }
 
         .invisible-zone {
@@ -181,14 +174,12 @@ export class KanbanBoard extends HTMLElement {
         }
 
         .invisible-zone:hover { opacity: 1; background-color: rgba(9,30,66,.08); color: #172b4d; }
-        
-        /* Dead zones have no pointer events so they cannot be clicked or hovered */
         .dead-zone { pointer-events: none; } 
       </style>
     `;
   }
 
-  // --- RENDERING WITH ADJACENCY MATRIX ---
+  // --- 5. RENDERER (Adjacency Matrix) ---
   render() {
     const style = this.getStyles();
     if (this.isLoading) { this.shadow.innerHTML = `${style}<div>Loading...</div>`; return; }
@@ -196,17 +187,22 @@ export class KanbanBoard extends HTMLElement {
     const colCount = this.data.columns.length;
     const swimCount = this.data.swimlanes.length;
 
+    // STATE 1: Empty Board (Auto-creates 1st Col and Swim)
     if (colCount === 0) {
         this.shadow.innerHTML = `${style}<div class="board-container"><div class="invisible-zone" id="first-col-btn" style="grid-column: 1; grid-row: 1; opacity: 1;">+ Create List</div></div>`;
-        this.shadow.getElementById('first-col-btn').addEventListener('click', () => this.handleAddList(0, 0));
+        this.shadow.getElementById('first-col-btn').addEventListener('click', async () => {
+            await api.createSwimlane('Main Lane');
+            await this.handleAddColumn('New List');
+        });
         return;
     }
 
+    // STATE 2: Populated 2D Grid
     let gridHtml = '';
     const totalCols = colCount + 1;
     const totalSwims = swimCount + 1;
 
-    // 1. Map existing lists by their X/Y indices so we can easily check neighbors
+    // Map active coordinates for adjacency logic
     const activeIndices = new Set();
     for (let y = 0; y < swimCount; y++) {
         for (let x = 0; x < colCount; x++) {
@@ -218,14 +214,13 @@ export class KanbanBoard extends HTMLElement {
         }
     }
 
-    // 2. Loop the entire grid
+    // Generate the DOM
     for (let y = 0; y < totalSwims; y++) {
         for (let x = 0; x < totalCols; x++) {
             const isPopulated = activeIndices.has(`${x}-${y}`);
             const gridCoords = `grid-column: ${x + 1}; grid-row: ${y + 1};`;
 
             if (isPopulated) {
-                // Render the real list
                 const col = this.data.columns[x];
                 const swim = this.data.swimlanes[y];
                 gridHtml += `
@@ -238,22 +233,12 @@ export class KanbanBoard extends HTMLElement {
                     ></kanban-list>
                 `;
             } else {
-                // 3. THE FIX: Check if this empty space touches an active list (Top, Bottom, Left, or Right)
-                const isAdjacent = 
-                    activeIndices.has(`${x - 1}-${y}`) || // Left
-                    activeIndices.has(`${x + 1}-${y}`) || // Right
-                    activeIndices.has(`${x}-${y - 1}`) || // Top
-                    activeIndices.has(`${x}-${y + 1}`);   // Bottom
+                // Adjacency Check: Only allow spawning directly next to/below an existing list
+                const isAdjacent = activeIndices.has(`${x - 1}-${y}`) || activeIndices.has(`${x + 1}-${y}`) || activeIndices.has(`${x}-${y - 1}`) || activeIndices.has(`${x}-${y + 1}`);
 
                 if (isAdjacent) {
-                    // Valid drop zone (directly next to or below a list)
-                    gridHtml += `
-                        <div class="invisible-zone add-list-btn" data-x="${x}" data-y="${y}" style="${gridCoords}">
-                            + Add List
-                        </div>
-                    `;
+                    gridHtml += `<div class="invisible-zone add-list-btn" data-x="${x}" data-y="${y}" style="${gridCoords}">+ Add List</div>`;
                 } else {
-                    // Invalid zone (diagonal). Render an empty, unclickable spacer.
                     gridHtml += `<div class="dead-zone" style="${gridCoords}"></div>`;
                 }
             }
@@ -262,18 +247,9 @@ export class KanbanBoard extends HTMLElement {
 
     this.shadow.innerHTML = `${style}<div class="board-container">${gridHtml}</div>`;
     
-    // Hydrate
-    const listElements = this.shadow.querySelectorAll('kanban-list');
-    listElements.forEach(listEl => {
-        const colId = parseInt(listEl.getAttribute('data-col-id'));
-        const swimId = parseInt(listEl.getAttribute('data-swim-id'));
-        listEl.data = {
-            column: this.data.columns.find(c => c.id === colId),
-            tasks: this.data.tasks.filter(t => t.colId === colId && t.swimId === swimId)
-        };
-    });
+    this.updateComponents(); // Hydrate the newly created lists
 
-    // Attach Listeners
+    // Attach Event Listeners to the Invisible Buttons
     const ghostZones = this.shadow.querySelectorAll('.add-list-btn');
     ghostZones.forEach(zone => {
         zone.addEventListener('click', (e) => {
@@ -282,6 +258,30 @@ export class KanbanBoard extends HTMLElement {
             this.handleAddList(x, y);
         });
     });
+
+    this.attachSizingPhysics();
+  }
+
+  // --- 6. SIZING PHYSICS ---
+  attachSizingPhysics() {
+    if (this.resizeObserver) this.resizeObserver.disconnect();
+
+    this.resizeObserver = new ResizeObserver(entries => {
+        for (let entry of entries) {
+            const listHeight = entry.contentRect.height;
+            const listWidth = entry.contentRect.width;
+            const colIndex = parseInt(entry.target.getAttribute('data-col-index'));
+
+            // The exact neighbor logic depends on the specific grid layout rendered
+            // This ensures invisible zones stretch to match their neighbors
+            const nextRight = entry.target.nextElementSibling;
+            if (nextRight && nextRight.classList.contains('invisible-zone') && !nextRight.classList.contains('dead-zone')) {
+                nextRight.style.height = `${listHeight}px`;
+            }
+        }
+    });
+
+    this.shadow.querySelectorAll('kanban-list').forEach(list => this.resizeObserver.observe(list));
   }
 }
 
