@@ -18,34 +18,39 @@ export class KanbanCard extends HTMLElement {
     render() {
         if (!this._task) return; 
 
+        // Default to Trello-grey if the list has no color set
+        const bannerColor = this._task.listColor || '#dfe1e6'; 
+
         this.shadow.innerHTML = `
             <style>
                 :host { display: block; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
                 
-                /* Premium Card Styling */
                 .task-card { 
-        background-color: #fff; 
-        border-radius: 4px; 
-        box-shadow: 0 1px 2px rgba(9,30,66,.15); 
-        padding: 10px 12px; 
-        margin-bottom: 8px; 
-        font-size: 0.95rem;
-        color: #172b4d;
-        line-height: 1.4;
-        user-select: none; -webkit-user-select: none;
-        border: 1px solid transparent;
-        transition: box-shadow 0.15s ease, background-color 0.15s ease;
+                    background-color: #fff; 
+                    border-radius: 4px; 
+                    box-shadow: 0 1px 2px rgba(9,30,66,.15); 
+                    padding: 10px 12px; 
+                    margin-bottom: 8px; 
+                    font-size: 0.95rem;
+                    color: #172b4d;
+                    line-height: 1.4;
+                    user-select: none; -webkit-user-select: none;
+                    transition: box-shadow 0.15s ease, background-color 0.15s ease;
+                    cursor: pointer;
 
-        /* THE FIX: The classic pointer finger (High contrast, native, and clean) */
-        cursor: pointer; 
-    }
+                    /* The Colored Banner */
+                    border: 1px solid transparent;
+                    border-top: 4px solid ${bannerColor}; 
+                }
 
-    .task-card:hover { 
-        background-color: #f4f5f7; 
-        box-shadow: 0 4px 8px rgba(9,30,66,.15); 
-        border-color: #dfe1e6; 
-    }
-                .text-display { pointer-events: none; } /* Let the parent catch the double click */
+                .task-card:hover { 
+                    background-color: #f4f5f7; 
+                    box-shadow: 0 4px 8px rgba(9,30,66,.15); 
+                    border-color: #dfe1e6; 
+                    border-top-color: ${bannerColor}; 
+                }
+
+                .text-display { pointer-events: none; }
 
                 /* The Hidden Edit Form */
                 .edit-form { display: none; margin-bottom: 8px; }
@@ -76,15 +81,14 @@ export class KanbanCard extends HTMLElement {
         const form = this.shadow.getElementById('edit-form');
         const input = this.shadow.getElementById('edit-input');
 
-        // 1. DOUBLE CLICK TO EDIT
         display.addEventListener('dblclick', (e) => {
-            e.stopPropagation(); // Stop the drag controller from firing
+            e.stopPropagation(); 
             this.isEditing = true;
             display.style.display = 'none';
             form.style.display = 'block';
             input.value = this._task.text;
             input.focus();
-            input.select(); // Highlight the text so it's easy to overwrite
+            input.select(); 
         });
 
         const saveChanges = () => {
@@ -93,30 +97,20 @@ export class KanbanCard extends HTMLElement {
             
             const newText = input.value.trim();
             if (newText !== '' && newText !== this._task.text) {
-                // Dispatch event to the main board to save the change
                 this.dispatchEvent(new CustomEvent('task-renamed', { 
                     detail: { taskId: this._task.id, newText: newText }, 
                     bubbles: true, composed: true 
                 }));
             } else {
-                // Revert UI if no changes were made
                 display.style.display = 'block';
                 form.style.display = 'none';
             }
         };
 
-        // 2. SAVE ON BLUR (Clicking away) OR ENTER KEY
         input.addEventListener('blur', saveChanges);
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                input.blur(); // Trigger the blur event
-            }
-            if (e.key === 'Escape') {
-                this.isEditing = false;
-                display.style.display = 'block';
-                form.style.display = 'none';
-            }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { this.isEditing = false; display.style.display = 'block'; form.style.display = 'none'; }
         });
     }
 }

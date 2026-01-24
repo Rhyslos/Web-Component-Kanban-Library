@@ -24,9 +24,20 @@ export class KanbanList extends HTMLElement {
                 
                 .list { background-color: #ebecf0; border-radius: 6px; display: flex; flex-direction: column; max-height: 100%; box-shadow: 0 1px 2px rgba(9,30,66,.15); transition: box-shadow 0.2s ease; }
                 
-                /* HEADER STYLING */
                 .header-container { padding: 12px 14px; position: relative; }
-                .list-header { font-weight: 600; color: #172b4d; font-size: 1rem; cursor: pointer; user-select: none; }
+                .header-wrapper { display: flex; align-items: center; gap: 8px; width: 100%; }
+                
+                /* The Native Color Picker */
+                .color-picker { 
+                    -webkit-appearance: none; -moz-appearance: none; appearance: none;
+                    width: 16px; height: 16px; border: none; border-radius: 50%; cursor: pointer;
+                    background: transparent; padding: 0; overflow: hidden;
+                    box-shadow: 0 0 0 1px rgba(9,30,66,.15); flex-shrink: 0;
+                }
+                .color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+                .color-picker::-webkit-color-swatch { border: none; }
+
+                .list-header { font-weight: 600; color: #172b4d; font-size: 1rem; cursor: pointer; user-select: none; flex-grow: 1; }
                 .header-input { 
                     display: none; width: 100%; box-sizing: border-box; font-family: inherit; font-size: 1rem; font-weight: 600; color: #172b4d;
                     padding: 4px 8px; margin: -4px -8px; border-radius: 4px; border: none; outline: 2px solid #0079bf;
@@ -34,7 +45,6 @@ export class KanbanList extends HTMLElement {
 
                 .task-list { padding: 0 8px; overflow-y: auto; flex-grow: 1; min-height: 4px; }
                 
-                /* BETTER "ADD TASK" TRIGGER */
                 .add-btn { 
                     display: flex; align-items: center; padding: 10px 12px; margin: 4px 8px 8px 8px; 
                     cursor: pointer; border: none; background: none; text-align: left; 
@@ -43,7 +53,6 @@ export class KanbanList extends HTMLElement {
                 }
                 .add-btn:hover { background-color: rgba(9,30,66,.08); color: #172b4d; }
 
-                /* POLISHED FORM UI */
                 .form-container { display: none; padding: 0 8px 8px 8px; flex-direction: column; gap: 8px; }
                 .form-input { 
                     border: none; border-radius: 4px; padding: 10px 12px;
@@ -58,7 +67,10 @@ export class KanbanList extends HTMLElement {
             </style>
             <div class="list" data-id="${this.column.id}">
                 <div class="header-container">
-                    <div class="list-header" id="header-display" title="Double click to rename"></div>
+                    <div class="header-wrapper" id="header-wrapper">
+                        <input type="color" class="color-picker" id="color-picker" title="Change list color" />
+                        <div class="list-header" id="header-display" title="Double click to rename"></div>
+                    </div>
                     <input class="header-input" id="header-input" type="text" />
                 </div>
                 
@@ -78,21 +90,27 @@ export class KanbanList extends HTMLElement {
     }
 
     updateData() {
-        // Safe Update (Only updates DOM if text changed to avoid breaking input focus)
         const display = this.shadow.getElementById('header-display');
-        if (display.textContent !== this.column.title) {
-            display.textContent = this.column.title;
-        }
+        const colorPicker = this.shadow.getElementById('color-picker');
+
+        if (display.textContent !== this.column.title) display.textContent = this.column.title;
+        
+        // Sync color picker with backend data
+        const listColor = this.column.color || '#dfe1e6';
+        if (colorPicker.value !== listColor) colorPicker.value = listColor;
 
         const container = this.shadow.getElementById('task-container');
         const existingCards = container.querySelectorAll('kanban-card');
 
-        for (let i = 0; i < Math.min(this.tasks.length, existingCards.length); i++) existingCards[i].data = this.tasks[i];
+        // Pass the listColor to every card
+        for (let i = 0; i < Math.min(this.tasks.length, existingCards.length); i++) {
+            existingCards[i].data = { ...this.tasks[i], listColor: listColor };
+        }
 
         if (this.tasks.length > existingCards.length) {
             for (let i = existingCards.length; i < this.tasks.length; i++) {
                 const newCard = document.createElement('kanban-card');
-                newCard.data = this.tasks[i];
+                newCard.data = { ...this.tasks[i], listColor: listColor };
                 container.appendChild(newCard);
             }
         }
@@ -103,12 +121,12 @@ export class KanbanList extends HTMLElement {
     }
 
     _attachEvents() {
-        // --- 1. LIST RENAME EVENTS ---
         const display = this.shadow.getElementById('header-display');
+        const wrapper = this.shadow.getElementById('header-wrapper');
         const input = this.shadow.getElementById('header-input');
 
         display.addEventListener('dblclick', () => {
-            display.style.display = 'none';
+            wrapper.style.display = 'none';
             input.style.display = 'block';
             input.value = this.column.title;
             input.focus();
@@ -120,15 +138,22 @@ export class KanbanList extends HTMLElement {
             if (newTitle !== '' && newTitle !== this.column.title) {
                 this.dispatchEvent(new CustomEvent('list-renamed', { detail: { colId: this.column.id, newTitle: newTitle }, bubbles: true, composed: true }));
             }
-            display.style.display = 'block';
+            wrapper.style.display = 'flex';
             input.style.display = 'none';
         };
 
         input.addEventListener('blur', saveHeader);
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { display.style.display = 'block'; input.style.display = 'none'; } });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { wrapper.style.display = 'flex'; input.style.display = 'none'; } });
 
+        // LISTENER: Color Changed
+        const colorPicker = this.shadow.getElementById('color-picker');
+        colorPicker.addEventListener('input', (e) => {
+            this.dispatchEvent(new CustomEvent('list-color-changed', { 
+                detail: { colId: this.column.id, newColor: e.target.value }, 
+                bubbles: true, composed: true 
+            }));
+        });
 
-        // --- 2. ADD TASK EVENTS ---
         const btn = this.shadow.getElementById('add-btn');
         const form = this.shadow.getElementById('form-container');
         const saveBtn = this.shadow.getElementById('save-btn');
