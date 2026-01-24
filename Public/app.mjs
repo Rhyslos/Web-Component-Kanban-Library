@@ -77,6 +77,20 @@ export class KanbanBoard extends HTMLElement {
             }
         }
     });
+
+    // NEW: Handle Category Text Changes
+    this.shadow.addEventListener('category-changed', async (e) => {
+        const { taskId, newCategory } = e.detail;
+        const task = this.data.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.category = newCategory; // 1. Update memory
+            this.updateComponents(); // 2. Instant UI update
+            
+            // Note: Add 'updateTaskCategory(taskId, category)' to api.mjs when we do the backend
+            // await api.updateTaskCategory(taskId, newCategory); 
+        }
+    });
+    
   }
 
   disconnectedCallback() {
