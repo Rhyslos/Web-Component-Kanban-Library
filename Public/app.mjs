@@ -55,20 +55,47 @@ export class KanbanBoard extends HTMLElement {
         }
     });
 
-    this.dragController = new DragController(this.shadow, {
-        onDrop: async (taskId, newColId, newSwimId) => {
+   this.dragController = new DragController(this.shadow, {
+        onDrop: async (taskId, target) => {
             const task = this.data.tasks.find(t => t.id === taskId);
             if (!task) return;
 
+            // SCENARIO 1: Creating a New List by Dragging a Card
+            if (target.isGhost) {
+                let newColId;
+                if (target.x >= this.data.columns.length) {
+                    const newCol = await api.createColumn('New List');
+                    newColId = newCol.id;
+                } else { newColId = this.data.columns[target.x].id; }
+
+                let newSwimId;
+                if (target.y >= this.data.swimlanes.length) {
+                    const newSwim = await api.createSwimlane('Main Lane');
+                    newSwimId = newSwim.id;
+                } else { newSwimId = this.data.swimlanes[target.y].id; }
+
+                // 1. Move the task in the DB
+                await api.moveTask(taskId, newColId, newSwimId);
+
+                // 2. THE FIX: We removed 'this.activeCells.add()' here.
+                // Now, loadData() will automatically detect the new task coordinates, 
+                // realize the grid needs to grow, and render the new list.
+                await this.loadData();
+                return;
+            }
+
+            // SCENARIO 2: Normal Drop (Existing List) - Optimistic UI
             const oldColId = task.colId;
             const oldSwimId = task.swimId;
 
-            task.colId = newColId;
-            task.swimId = newSwimId;
-            this.updateComponents();
+            if (oldColId === target.colId && oldSwimId === target.swimId) return; // No change
+
+            task.colId = target.colId;
+            task.swimId = target.swimId;
+            this.updateComponents(); // Instant UI change
 
             try {
-                await api.moveTask(taskId, newColId, newSwimId);
+                await api.moveTask(taskId, target.colId, target.swimId);
             } catch (error) {
                 console.error("Network Error: Rolling back UI...", error);
                 task.colId = oldColId;
@@ -90,7 +117,7 @@ export class KanbanBoard extends HTMLElement {
             // await api.updateTaskCategory(taskId, newCategory); 
         }
     });
-    
+
   }
 
   disconnectedCallback() {
@@ -182,9 +209,10 @@ export class KanbanBoard extends HTMLElement {
 
     if (colCount === 0) {
         this.shadow.innerHTML = `${style}<div class="board-container"><div class="invisible-zone" id="first-col-btn" style="grid-column: 1; grid-row: 1; opacity: 1;">+ Create List</div></div>`;
-        this.shadow.getElementById('first-col-btn').addEventListener('click', async () => {
-            await api.createSwimlane('Main Lane');
-            await this.handleAddColumn('New List');
+        
+        // THE FIX: Use the new smart list creator at coordinates (0,0)
+        this.shadow.getElementById('first-col-btn').addEventListener('click', () => {
+            this.handleAddList(0, 0); 
         });
         return;
     }
