@@ -1,67 +1,36 @@
-# Kanban Board API Documentation
+# Custom Middleware: Input Validation
 
-**Base URL:** `/api`  
-**Content-Type:** `application/json`  
-**Success Response:** `200 OK` or `201 Created`  
-**Error Response:** `400 Bad Request` or `500 Internal Server Error`
+## 1. The Need
+In a standard Express API, the server blindly trusts incoming data. This creates two problems:
+1. **Data Integrity:** A user could accidentally create an empty task, cluttering the database.
+2. **Security Vulnerability:** A malicious user could send a Cross-Site Scripting (XSS) attack by injecting JavaScript (e.g., `<script>alert('hack')</script>`) into the Kanban board, which would execute in other users' browsers.
 
----
+To solve this, I created a custom middleware function to act as a "Bouncer" for the API.
 
-## 1. Board State
+## 2. Functionality
+The `validateInput` middleware intercepts all `POST` (Create) and `PUT` (Update) requests before they reach the database routing logic. It performs two checks:
+* **Validation Check:** Ensures `req.body.title` and `req.body.taskText` are not empty strings.
+* **Sanitization Check:** Uses Regular Expressions (Regex) to scan the input for dangerous HTML characters (`<` or `>`).
 
-The primary endpoint to hydrate the entire application on initial load.
+## 3. Implementation Details
+The middleware utilizes the standard Express request-response cycle. 
+* If the data is **invalid**, the middleware terminates the cycle immediately and returns a `400 Bad Request` status with a JSON error message.
+* If the data is **valid**, the middleware calls the `next()` function, passing control to the appropriate API endpoint.
 
-| Method | Endpoint | Description | Response |
-| :--- | :--- | :--- | :--- |
-| **GET** | `/board` | Retrieves the complete 2D matrix, including all active columns, swimlanes, and tasks. | `{ columns: [], swimlanes: [], tasks: [] }` |
+**Code Example:**
+\`\`\`javascript
+// middleware.mjs
+export const validateInput = (req, res, next) => {
+    if (req.method === 'POST' || req.method === 'PUT') {
+        const { title, taskText } = req.body;
+        const dangerousChars = /[<>]/;
 
----
-
-## 2. Columns (Lists)
-
-Manage the vertical lists that contain task cards.
-
-| Method | Endpoint | Payload | Description |
-| :--- | :--- | :--- | :--- |
-| **POST** | `/columns` | `{ "title": "New List" }` | Creates a new column at the end of the X-axis. Defaults to a grey color. |
-| **PUT** | `/columns/:id` | `{ "title": "Dev", "color": "#0079bf" }` | Updates the column's display title or hex color. Both fields are optional. |
-
----
-
-## 3. Swimlanes (Rows)
-
-Manage the horizontal rows that create the 2D grid structure.
-
-| Method | Endpoint | Payload | Description |
-| :--- | :--- | :--- | :--- |
-| **POST** | `/swimlanes` | `{ "title": "Main Lane" }` | Creates a new swimlane at the bottom of the Y-axis. |
-
----
-
-## 4. Tasks (Cards)
-
-Manage the individual cards. Tasks are linked to both a Column ID and Swimlane ID to determine their exact grid position.
-
-| Method | Endpoint | Payload | Description |
-| :--- | :--- | :--- | :--- |
-| **POST** | `/tasks` | `{ "colId": 1, "swimId": 1, "text": "New task" }` | Creates a new task in the specified grid coordinate. |
-| **PUT** | `/tasks/:id` | `{ "colId": 2, "swimId": 1 }` | Moves a task to a new coordinate (Used by Drag & Drop). |
-| **PUT** | `/tasks/:id` | `{ "text": "Updated title", "category": "URGENT" }` | Updates task content or its banner category. Fields are optional. |
-
----
-
-## Data Model
-
-This is the complete JSON structure of the application, returned by the `GET /board` endpoint.
-
-```json
-{
-  "columns": [
-    {
-      "id": 101,
-      "title": "To Do",
-      "color": "#0079bf" // Applied to the banner of child tasks
+        // Block empty strings or HTML tags
+        if (title?.trim() === "" || dangerousChars.test(title)) {
+            return res.status(400).json({ error: "Invalid input." });
+        }
     }
+<<<<<<< HEAD
   ],
 
   
@@ -83,3 +52,8 @@ This is the complete JSON structure of the application, returned by the `GET /bo
     }
   ]
 }
+=======
+    next(); // Pass control to the router
+};
+\`\`\`
+>>>>>>> parent of 77e458c (Updated documentation)
