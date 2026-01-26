@@ -63,12 +63,16 @@ This is the complete JSON structure of the application, returned by the `GET /bo
       "color": "#0079bf" // Applied to the banner of child tasks
     }
   ],
+
+  
   "swimlanes": [
     {
       "id": 1,
       "title": "Main Lane" 
     }
   ],
+
+
   "tasks": [
     {
       "id": 201,

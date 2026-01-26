@@ -1,106 +1,90 @@
-import express from "express";
+/**
+ * api.mjs (The Permanent Node.js Backend)
+ */
+import express from 'express';
+import cors from 'cors';
+import fs from 'fs/promises'; // NEW: Node's native File System module
+import path from 'path';
 
-const router = express.Router();
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-// 1. THE RELATIONAL DATABASE
-// Since you wanted the board to start empty, all arrays start blank.
-let db = {
-    columns: [],
-    swimlanes: [],
-    tasks: [] 
-};
+// Points to the new database file you created
+const DB_PATH = path.resolve('database.json');
 
-// ==========================================
-// READ ENDPOINTS
-// ==========================================
+// --- DATABASE HANDLERS ---
+// This opens the file and reads the data
+async function readDB() {
+    try {
+        const data = await fs.readFile(DB_PATH, 'utf-8');
+        return JSON.parse(data);
+    } catch (error) {
+        return { columns: [], swimlanes: [], tasks: [], cellStyles: {} };
+    }
+}
 
-// GET: Read the entire board state
-router.get('/board', (req, res) => {
+// This overwrites the file with new data to save it
+async function writeDB(data) {
+    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
+}
+
+// --- ENDPOINTS ---
+
+// 1. Get Board
+app.get('/api/board', async (req, res) => {
+    const db = await readDB();
     res.json(db);
 });
 
-// ==========================================
-// CREATE ENDPOINTS
-// ==========================================
+// 2. Create Column & Swimlane
+app.post('/api/columns', async (req, res) => {
+    const db = await readDB();
+    const newCol = { id: Date.now(), title: req.body.title || 'New List' };
+    db.columns.push(newCol);
+    await writeDB(db);
+    res.status(201).json(newCol);
+});
 
-// POST: Add a new Column
-router.post('/columns', (req, res) => {
-    const { title } = req.body;
+app.post('/api/swimlanes', async (req, res) => {
+    const db = await readDB();
+    const newSwim = { id: Date.now(), title: req.body.title || 'Main Lane' };
+    db.swimlanes.push(newSwim);
+    await writeDB(db);
+    res.status(201).json(newSwim);
+});
+
+// 3. Update Independent List Color
+app.put('/api/lists/:colId/:swimId/color', async (req, res) => {
+    const db = await readDB();
+    const cellId = `${req.params.colId}-${req.params.swimId}`;
     
-    if (title) {
-        const newColumn = { id: Date.now(), title: title };
-        db.columns.push(newColumn);
-        res.status(201).json(newColumn);
-    } else {
-        res.status(400).send("Title is required");
-    }
-});
-
-// POST: Add a new Swimlane
-router.post('/swimlanes', (req, res) => {
-    const { title } = req.body;
+    db.cellStyles[cellId] = req.body.color; 
     
-    if (title) {
-        const newSwimlane = { id: Date.now(), title: title };
-        db.swimlanes.push(newSwimlane);
-        res.status(201).json(newSwimlane);
-    } else {
-        res.status(400).send("Title is required");
+    await writeDB(db);
+    res.json({ success: true });
+});
+
+// 4. Tasks (Move, Create, Update)
+app.post('/api/tasks', async (req, res) => {
+    const db = await readDB();
+    const newTask = { id: Date.now(), colId: req.body.colId, swimId: req.body.swimId, text: req.body.text, category: '' };
+    db.tasks.push(newTask);
+    await writeDB(db);
+    res.status(201).json(newTask);
+});
+
+app.put('/api/tasks/:id', async (req, res) => {
+    const db = await readDB();
+    const task = db.tasks.find(t => t.id === parseInt(req.params.id));
+    if (task) {
+        if (req.body.colId) task.colId = req.body.colId;
+        if (req.body.swimId) task.swimId = req.body.swimId;
+        if (req.body.text) task.text = req.body.text;
+        if (typeof req.body.category !== 'undefined') task.category = req.body.category;
+        await writeDB(db);
     }
+    res.json(task);
 });
 
-// POST: Add Task (Now requires both coordinates)
-router.post('/tasks', (req, res) => {
-    const { columnId, swimlaneId, taskText } = req.body;
-    
-    // Validate that the coordinates actually exist
-    const columnExists = db.columns.some(col => col.id === columnId);
-    const swimlaneExists = db.swimlanes.some(swim => swim.id === swimlaneId);
-
-    if (columnExists && swimlaneExists && taskText) {
-        const newTask = { 
-            id: Date.now(), 
-            text: taskText,
-            colId: columnId,   // X Coordinate
-            swimId: swimlaneId // Y Coordinate
-        };
-        db.tasks.push(newTask);
-        res.status(201).json(newTask);
-    } else {
-        res.status(400).send("Invalid grid coordinates or missing text");
-    }
-});
-
-// ==========================================
-// UPDATE ENDPOINTS
-// ==========================================
-
-// PUT: Move Task (Update its X and Y coordinates)
-router.put('/tasks/:taskId', (req, res) => {
-    const taskId = parseInt(req.params.taskId);
-    const { newColumnId, newSwimlaneId } = req.body;
-
-    const taskToMove = db.tasks.find(t => t.id === taskId);
-
-    if (taskToMove) {
-        // Update the task's coordinates
-        taskToMove.colId = newColumnId;
-        taskToMove.swimId = newSwimlaneId;
-        res.status(200).json(taskToMove);
-    } else {
-        res.status(404).send("Task not found");
-    }
-});
-
-// ==========================================
-// DELETE ENDPOINTS
-// ==========================================
-
-// DELETE: Remove Task
-router.delete('/tasks/:taskId', (req, res) => {
-    const taskId = parseInt(req.params.taskId);
-    db.tasks = db.tasks.filter(task => task.id !== taskId);
-    res.status(200).send("Task deleted");
-});
-
-export default router;
+app.listen(3000, () => console.log('✅ Persistent API running on http://localhost:3000'));

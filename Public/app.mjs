@@ -1,61 +1,66 @@
 /**
  * Public/app.mjs (The Main Board Component)
  */
-import { api } from '/modules/kanban-service.mjs';
-import { DragController } from '/modules/drag-controller.mjs';
-import '/modules/kanban-list.mjs';
+import { api } from '../Modules/kanban-service.mjs';
+import { DragController } from '../Modules/drag-controller.mjs';
+import '../Modules/kanban-list.mjs';
 
 export class KanbanBoard extends HTMLElement {
   constructor() {
     super();
     this.shadow = this.attachShadow({ mode: "open" });
-    this.data = { columns: [], swimlanes: [], tasks: [] };
+    this.data = { columns: [], swimlanes: [], tasks: [], cellStyles: {} };
     this.isLoading = true;
     this.resizeObserver = null; 
     this.activeCells = new Set(); 
   }
 
+  // --- 1. LIFECYCLE MANAGEMENT ---
   connectedCallback() {
     this.render();
     this.loadData();
 
+    // Listener: Add Task
     this.shadow.addEventListener('task-added', (e) => {
         const swimId = e.target.getAttribute('data-swim-id') ? parseInt(e.target.getAttribute('data-swim-id')) : this.data.swimlanes[0].id;
         this.handleAddTask(e.detail.colId, swimId, e.detail.text); 
     });
 
+    // Listener: Rename Task (Optimistic UI)
     this.shadow.addEventListener('task-renamed', async (e) => {
         const { taskId, newText } = e.detail;
         const task = this.data.tasks.find(t => t.id === taskId);
         if (task) {
             task.text = newText;
-            this.updateComponents(); 
-            // await api.updateTaskText(taskId, newText); 
+            this.updateComponents(); // Instant UI
+            await api.updateTask(taskId, { text: newText }); // Persistent Save
         }
     });
 
-    this.shadow.addEventListener('list-renamed', async (e) => {
-        const { colId, newTitle } = e.detail;
-        const column = this.data.columns.find(c => c.id === colId);
-        if (column) {
-            column.title = newTitle;
+    // Listener: Change Category (Optimistic UI)
+    this.shadow.addEventListener('category-changed', async (e) => {
+        const { taskId, newCategory } = e.detail;
+        const task = this.data.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.category = newCategory; 
             this.updateComponents(); 
-            // await api.updateColumnTitle(colId, newTitle); 
+            await api.updateTask(taskId, { category: newCategory }); 
         }
     });
 
-    // NEW: Handle Color Change
+    // Listener: Change List Color (Optimistic UI)
     this.shadow.addEventListener('list-color-changed', async (e) => {
-        const { colId, newColor } = e.detail;
-        const column = this.data.columns.find(c => c.id === colId);
-        if (column) {
-            column.color = newColor; 
-            this.updateComponents(); 
-            // await api.updateColumnColor(colId, newColor);
-        }
+        const { colId, swimId, newColor } = e.detail;
+        if (!this.data.cellStyles) this.data.cellStyles = {};
+        
+        this.data.cellStyles[`${colId}-${swimId}`] = newColor; // 1. Update memory
+        this.updateComponents(); // 2. Instant UI update
+
+        await api.updateListColor(colId, swimId, newColor); // 3. Persistent Save
     });
 
-   this.dragController = new DragController(this.shadow, {
+    // Physics Engine: Handles Ghost Drops & Normal Drops
+    this.dragController = new DragController(this.shadow, {
         onDrop: async (taskId, target) => {
             const task = this.data.tasks.find(t => t.id === taskId);
             if (!task) return;
@@ -74,17 +79,13 @@ export class KanbanBoard extends HTMLElement {
                     newSwimId = newSwim.id;
                 } else { newSwimId = this.data.swimlanes[target.y].id; }
 
-                // 1. Move the task in the DB
                 await api.moveTask(taskId, newColId, newSwimId);
-
-                // 2. THE FIX: We removed 'this.activeCells.add()' here.
-                // Now, loadData() will automatically detect the new task coordinates, 
-                // realize the grid needs to grow, and render the new list.
+                // The loadData diffing engine will detect the new coordinate naturally
                 await this.loadData();
                 return;
             }
 
-            // SCENARIO 2: Normal Drop (Existing List) - Optimistic UI
+            // SCENARIO 2: Normal Drop (Optimistic UI)
             const oldColId = task.colId;
             const oldSwimId = task.swimId;
 
@@ -104,20 +105,6 @@ export class KanbanBoard extends HTMLElement {
             }
         }
     });
-
-    // NEW: Handle Category Text Changes
-    this.shadow.addEventListener('category-changed', async (e) => {
-        const { taskId, newCategory } = e.detail;
-        const task = this.data.tasks.find(t => t.id === taskId);
-        if (task) {
-            task.category = newCategory; // 1. Update memory
-            this.updateComponents(); // 2. Instant UI update
-            
-            // Note: Add 'updateTaskCategory(taskId, category)' to api.mjs when we do the backend
-            // await api.updateTaskCategory(taskId, newCategory); 
-        }
-    });
-
   }
 
   disconnectedCallback() {
@@ -125,6 +112,7 @@ export class KanbanBoard extends HTMLElement {
     if (this.resizeObserver) this.resizeObserver.disconnect();
   }
 
+  // --- 2. DATA SYNCHRONIZATION ---
   async loadData() {
     try {
         this.data = await api.getBoard();
@@ -137,6 +125,7 @@ export class KanbanBoard extends HTMLElement {
         }
         this.data.tasks.forEach(t => this.activeCells.add(`${t.colId}-${t.swimId}`));
 
+        // Diffing Algorithm
         if (this.activeCells.size !== previousCellCount || !this.shadow.querySelector('.board-container')) {
             this.render(); 
         } else {
@@ -146,34 +135,39 @@ export class KanbanBoard extends HTMLElement {
     } catch (error) { console.error("Failed to load:", error); }
   }
 
+  // Fast-Path Hydration
   updateComponents() {
+    if (!this.data.cellStyles) this.data.cellStyles = {};
+
     const listElements = this.shadow.querySelectorAll('kanban-list');
     listElements.forEach(listEl => {
         const colId = parseInt(listEl.getAttribute('data-col-id'));
         const swimId = parseInt(listEl.getAttribute('data-swim-id'));
+        
+        const column = this.data.columns.find(c => c.id === colId);
+        // Look up the specific color for this exact grid coordinate
+        const cellColor = this.data.cellStyles[`${colId}-${swimId}`] || '#dfe1e6';
+
         listEl.data = {
-            column: this.data.columns.find(c => c.id === colId),
+            column: { id: column.id, title: column.title, color: cellColor },
             tasks: this.data.tasks.filter(t => t.colId === colId && t.swimId === swimId)
         };
     });
   }
 
+  // --- 3. API ACTIONS ---
   async handleAddList(colIndex, swimIndex) {
     let colId, swimId;
 
     if (colIndex >= this.data.columns.length) {
         const newCol = await api.createColumn('New List');
         colId = newCol.id;
-    } else {
-        colId = this.data.columns[colIndex].id;
-    }
+    } else { colId = this.data.columns[colIndex].id; }
 
     if (swimIndex >= this.data.swimlanes.length) {
         const newSwim = await api.createSwimlane('Main Lane');
         swimId = newSwim.id;
-    } else {
-        swimId = this.data.swimlanes[swimIndex].id;
-    }
+    } else { swimId = this.data.swimlanes[swimIndex].id; }
 
     this.data = await api.getBoard(); 
     this.activeCells.add(`${colId}-${swimId}`);
@@ -185,6 +179,7 @@ export class KanbanBoard extends HTMLElement {
     this.loadData();
   }
 
+  // --- 4. STYLES (Clean UI & Grid) ---
   getStyles() {
     const totalCols = this.data.columns.length + 1; 
     const totalSwims = Math.max(1, this.data.swimlanes.length) + 1; 
@@ -200,6 +195,7 @@ export class KanbanBoard extends HTMLElement {
     `;
   }
 
+  // --- 5. RENDERER (Adjacency Matrix) ---
   render() {
     const style = this.getStyles();
     if (this.isLoading) { this.shadow.innerHTML = `${style}<div>Loading...</div>`; return; }
@@ -207,16 +203,16 @@ export class KanbanBoard extends HTMLElement {
     const colCount = this.data.columns.length;
     const swimCount = this.data.swimlanes.length;
 
+    // STATE 1: Empty Board 
     if (colCount === 0) {
         this.shadow.innerHTML = `${style}<div class="board-container"><div class="invisible-zone" id="first-col-btn" style="grid-column: 1; grid-row: 1; opacity: 1;">+ Create List</div></div>`;
-        
-        // THE FIX: Use the new smart list creator at coordinates (0,0)
         this.shadow.getElementById('first-col-btn').addEventListener('click', () => {
             this.handleAddList(0, 0); 
         });
         return;
     }
 
+    // STATE 2: Populated 2D Grid
     let gridHtml = '';
     const totalCols = colCount + 1;
     const totalSwims = swimCount + 1;
@@ -232,6 +228,7 @@ export class KanbanBoard extends HTMLElement {
         }
     }
 
+    // Generate the DOM
     for (let y = 0; y < totalSwims; y++) {
         for (let x = 0; x < totalCols; x++) {
             const isPopulated = activeIndices.has(`${x}-${y}`);
@@ -240,7 +237,15 @@ export class KanbanBoard extends HTMLElement {
             if (isPopulated) {
                 const col = this.data.columns[x];
                 const swim = this.data.swimlanes[y];
-                gridHtml += `<kanban-list class="list-component" data-col-index="${x + 1}" data-col-id="${col.id}" data-swim-id="${swim.id}" style="${gridCoords}"></kanban-list>`;
+                gridHtml += `
+                    <kanban-list 
+                        class="list-component"
+                        data-col-index="${x + 1}"
+                        data-col-id="${col.id}"
+                        data-swim-id="${swim.id}" 
+                        style="${gridCoords}"
+                    ></kanban-list>
+                `;
             } else {
                 const isAdjacent = activeIndices.has(`${x - 1}-${y}`) || activeIndices.has(`${x + 1}-${y}`) || activeIndices.has(`${x}-${y - 1}`) || activeIndices.has(`${x}-${y + 1}`);
 
@@ -257,6 +262,7 @@ export class KanbanBoard extends HTMLElement {
     
     this.updateComponents(); 
 
+    // Attach Event Listeners to the Invisible Buttons
     const ghostZones = this.shadow.querySelectorAll('.add-list-btn');
     ghostZones.forEach(zone => {
         zone.addEventListener('click', (e) => {
@@ -269,6 +275,7 @@ export class KanbanBoard extends HTMLElement {
     this.attachSizingPhysics();
   }
 
+  // --- 6. SIZING PHYSICS ---
   attachSizingPhysics() {
     if (this.resizeObserver) this.resizeObserver.disconnect();
 
