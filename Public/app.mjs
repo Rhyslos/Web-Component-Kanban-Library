@@ -59,6 +59,7 @@ export class KanbanBoard extends HTMLElement {
         await api.updateListColor(colId, swimId, newColor); // 3. Persistent Save
     });
 
+<<<<<<< HEAD
     // Physics Engine: Handles Ghost Drops & Normal Drops
     this.dragController = new DragController(this.shadow, {
         onDrop: async (taskId, target) => {
@@ -86,17 +87,22 @@ export class KanbanBoard extends HTMLElement {
             }
 
             // SCENARIO 2: Normal Drop (Optimistic UI)
+=======
+    this.dragController = new DragController(this.shadow, {
+        onDrop: async (taskId, newColId, newSwimId) => {
+            const task = this.data.tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+>>>>>>> parent of 330e280 (Added drag-and-drop to empty list area to instantly make a new list)
             const oldColId = task.colId;
             const oldSwimId = task.swimId;
 
-            if (oldColId === target.colId && oldSwimId === target.swimId) return; // No change
-
-            task.colId = target.colId;
-            task.swimId = target.swimId;
-            this.updateComponents(); // Instant UI change
+            task.colId = newColId;
+            task.swimId = newSwimId;
+            this.updateComponents();
 
             try {
-                await api.moveTask(taskId, target.colId, target.swimId);
+                await api.moveTask(taskId, newColId, newSwimId);
             } catch (error) {
                 console.error("Network Error: Rolling back UI...", error);
                 task.colId = oldColId;
@@ -105,6 +111,23 @@ export class KanbanBoard extends HTMLElement {
             }
         }
     });
+<<<<<<< HEAD
+=======
+
+    // NEW: Handle Category Text Changes
+    this.shadow.addEventListener('category-changed', async (e) => {
+        const { taskId, newCategory } = e.detail;
+        const task = this.data.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.category = newCategory; // 1. Update memory
+            this.updateComponents(); // 2. Instant UI update
+            
+            // Note: Add 'updateTaskCategory(taskId, category)' to api.mjs when we do the backend
+            // await api.updateTaskCategory(taskId, newCategory); 
+        }
+    });
+    
+>>>>>>> parent of 330e280 (Added drag-and-drop to empty list area to instantly make a new list)
   }
 
   disconnectedCallback() {
@@ -206,8 +229,14 @@ export class KanbanBoard extends HTMLElement {
     // STATE 1: Empty Board 
     if (colCount === 0) {
         this.shadow.innerHTML = `${style}<div class="board-container"><div class="invisible-zone" id="first-col-btn" style="grid-column: 1; grid-row: 1; opacity: 1;">+ Create List</div></div>`;
+<<<<<<< HEAD
         this.shadow.getElementById('first-col-btn').addEventListener('click', () => {
             this.handleAddList(0, 0); 
+=======
+        this.shadow.getElementById('first-col-btn').addEventListener('click', async () => {
+            await api.createSwimlane('Main Lane');
+            await this.handleAddColumn('New List');
+>>>>>>> parent of 330e280 (Added drag-and-drop to empty list area to instantly make a new list)
         });
         return;
     }

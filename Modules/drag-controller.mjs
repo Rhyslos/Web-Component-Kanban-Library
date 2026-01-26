@@ -1,5 +1,6 @@
 /**
- * Modules/drag-controller.mjs (Ghost-Aware Physics Engine)
+ * Modules/drag-controller.mjs
+ * Restored 60fps LERP physics adapted for nested Web Components.
  */
 
 export class DragController {
@@ -14,6 +15,7 @@ export class DragController {
             width: 0, height: 0, dropZones: []
         };
 
+        // THE FIX: Pre-bind the methods so they share the exact same memory reference
         this._boundOnPointerDown = this._onPointerDown.bind(this);
         this._boundOnPointerMove = this._onPointerMove.bind(this);
         this._boundOnPointerUp = this._onPointerUp.bind(this);
@@ -22,55 +24,69 @@ export class DragController {
     }
 
     _bindEvents() {
+        // Use the stable references
         this.container.addEventListener('pointerdown', this._boundOnPointerDown);
         window.addEventListener('pointermove', this._boundOnPointerMove);
         window.addEventListener('pointerup', this._boundOnPointerUp);
     }
 
     _onPointerDown(e) {
+        // THE FIX: e.composedPath() pierces the shadow DOM to find the specific card
         const path = e.composedPath();
         const card = path.find(el => el.tagName === 'KANBAN-CARD');
+        
         if (!card || ['BUTTON', 'INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
 
         const { state } = this;
         state.isDragging = true;
         state.draggedEl = card;
 
+        // 1. Measure the original card
         const rect = card.getBoundingClientRect();
         state.width = rect.width;
         state.height = rect.height;
         state.offsetX = e.clientX - rect.left;
         state.offsetY = e.clientY - rect.top;
 
-        // THE UPGRADE: Map existing lists AND the invisible Ghost Zones
-        state.dropZones = Array.from(this.container.querySelectorAll('kanban-list, .add-list-btn')).map(zone => {
-            const zoneRect = zone.getBoundingClientRect();
+        // 2. Map all potential Drop Zones (The Lists)
+        state.dropZones = Array.from(this.container.querySelectorAll('kanban-list')).map(list => {
+            const listRect = list.getBoundingClientRect();
             return {
-                element: zone,
-                isGhost: zone.classList.contains('add-list-btn'), // Flag it as a ghost
-                left: zoneRect.left, right: zoneRect.right,
-                top: zoneRect.top, bottom: zoneRect.bottom
+                element: list,
+                left: listRect.left, right: listRect.right,
+                top: listRect.top, bottom: listRect.bottom
             };
         });
 
-        state.ghostEl = card.cloneNode(true);
-        state.ghostEl.style.cssText = `
-            position: fixed; top: 0; left: 0; margin: 0;
-            pointer-events: none; z-index: 9999;
-            width: ${rect.width}px; height: ${rect.height}px;
-            will-change: transform; box-sizing: border-box;
-            transform: rotate(3deg) scale(1.02);
-        `;
-        
-        state.ghostEl.data = card.data;
+        // 3. Create the Ghost Clone
+       state.ghostEl = card.cloneNode(true);
+    
+    // THE FIX: Removed background, padding, and box-shadow. 
+    // We only apply the pure physics properties (position, width, height, z-index).
+    state.ghostEl.style.cssText = `
+        position: fixed; top: 0; left: 0; margin: 0;
+        pointer-events: none; z-index: 9999;
+        width: ${rect.width}px; height: ${rect.height}px;
+        will-change: transform; box-sizing: border-box;
+    `;
+    
+    // Pass the card's data to the clone so it renders its own text and styles
+    state.ghostEl.data = card.data; 
+
+    // Optional Polish: Tilt the card immediately when picked up so it feels "lifted"
+    state.ghostEl.style.transform = `rotate(3deg) scale(1.02)`;
+    
+    // Pass the card's data to the clone so it renders the text
+    state.ghostEl.data = card.data;
 
         state.targetX = state.currentX = e.clientX - state.offsetX;
         state.targetY = state.currentY = e.clientY - state.offsetY;
         state.targetTilt = state.currentTilt = 0;
         state.lastX = e.clientX;
 
+        // 4. Mount the Ghost to the Main Board and hide the original
         this.container.appendChild(state.ghostEl);
-        state.draggedEl.style.opacity = '0.2'; 
+        state.draggedEl.style.opacity = '0.2'; // The "Placeholder" effect
         
         state.animFrameId = requestAnimationFrame(this._updatePhysics.bind(this));
     }
@@ -82,6 +98,7 @@ export class DragController {
         state.targetX = e.clientX - state.offsetX;
         state.targetY = e.clientY - state.offsetY;
         
+        // YOUR ORIGINAL TILT MATH: Tilt based on mouse speed
         const speedX = e.clientX - state.lastX;
         state.lastX = e.clientX; 
         state.targetTilt = Math.max(-10, Math.min(10, speedX * 0.5)); 
@@ -91,6 +108,7 @@ export class DragController {
         const { state } = this;
         if (!state.isDragging) return;
 
+        // YOUR ORIGINAL LERP MATH: 35% lag for movement, 15% lag for tilt
         state.currentX += (state.targetX - state.currentX) * 0.35; 
         state.currentY += (state.targetY - state.currentY) * 0.35;
         state.currentTilt += (state.targetTilt - state.currentTilt) * 0.15; 
@@ -108,6 +126,7 @@ export class DragController {
         let bestMatch = null;
         let maxOverlapPct = 0;
 
+        // YOUR ORIGINAL COLLISION MATH: 8% overlap required
         state.dropZones.forEach(zone => {
             const overlapWidth = Math.max(0, Math.min(state.currentX + state.width, zone.right) - Math.max(state.currentX, zone.left));
             const overlapHeight = Math.max(0, Math.min(state.currentY + state.height, zone.bottom) - Math.max(state.currentY, zone.top));
@@ -119,22 +138,10 @@ export class DragController {
             }
         });
 
-        // Reset Styles
-        state.dropZones.forEach(z => {
-            z.element.style.boxShadow = 'none';
-            if (z.isGhost) { z.element.style.opacity = '0'; z.element.style.backgroundColor = 'transparent'; }
-        });
-
-        // Highlight Active Drop Zone
+        // Reset all, then highlight best match
+        state.dropZones.forEach(z => z.element.style.boxShadow = 'none');
         if (bestMatch) {
-            if (bestMatch.isGhost) {
-                // Style the ghost to look active
-                bestMatch.element.style.opacity = '1';
-                bestMatch.element.style.backgroundColor = 'rgba(9,30,66,.08)';
-                bestMatch.element.style.boxShadow = '0 0 0 2px #0079bf inset';
-            } else {
-                bestMatch.element.style.boxShadow = '0 0 0 2px #0079bf inset';
-            }
+            bestMatch.element.style.boxShadow = '0 0 0 2px #0079bf inset';
         }
     }
 
@@ -144,30 +151,26 @@ export class DragController {
 
         cancelAnimationFrame(state.animFrameId); 
 
+        // Find the active drop zone
         const activeZone = state.dropZones.find(z => z.element.style.boxShadow !== 'none');
 
         if (activeZone) {
+            const newColId = parseInt(activeZone.element.getAttribute('data-col-id'));
+            const newSwimId = parseInt(activeZone.element.getAttribute('data-swim-id'));
             const taskId = parseInt(state.draggedEl.data.id);
+            const oldColId = parseInt(state.draggedEl.data.colId);
+            const oldSwimId = parseInt(state.draggedEl.data.swimId);
 
-            // THE UPGRADE: Handle Ghost Drops vs Normal Drops
-            if (activeZone.isGhost) {
-                const x = parseInt(activeZone.element.getAttribute('data-x'));
-                const y = parseInt(activeZone.element.getAttribute('data-y'));
-                this.onDrop(taskId, { isGhost: true, x, y });
-            } else {
-                const newColId = parseInt(activeZone.element.getAttribute('data-col-id'));
-                const newSwimId = parseInt(activeZone.element.getAttribute('data-swim-id'));
-                this.onDrop(taskId, { isGhost: false, colId: newColId, swimId: newSwimId });
+            // Only fire API if the coordinates actually changed
+            if (newColId !== oldColId || newSwimId !== oldSwimId) {
+                this.onDrop(taskId, newColId, newSwimId);
             }
         }
 
         // Cleanup
         state.ghostEl.remove();
         state.draggedEl.style.opacity = '1';
-        state.dropZones.forEach(z => {
-            z.element.style.boxShadow = 'none';
-            if (z.isGhost) { z.element.style.opacity = '0'; z.element.style.backgroundColor = 'transparent'; }
-        });
+        state.dropZones.forEach(z => z.element.style.boxShadow = 'none');
         
         state.isDragging = false;
         state.draggedEl = null;
@@ -175,10 +178,19 @@ export class DragController {
     }
 
     destroy() {
+        // 1. Remove all listeners from the global window object
         this.container.removeEventListener('pointerdown', this._boundOnPointerDown);
         window.removeEventListener('pointermove', this._boundOnPointerMove);
         window.removeEventListener('pointerup', this._boundOnPointerUp);
-        if (this.state.animFrameId) cancelAnimationFrame(this.state.animFrameId);
-        if (this.state.ghostEl) this.state.ghostEl.remove();
+
+        // 2. Kill any active animation loops
+        if (this.state.animFrameId) {
+            cancelAnimationFrame(this.state.animFrameId);
+        }
+
+        // 3. Remove any lingering ghost DOM nodes if destroyed mid-drag
+        if (this.state.ghostEl) {
+            this.state.ghostEl.remove();
+        }
     }
 }
