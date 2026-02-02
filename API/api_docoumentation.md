@@ -1,35 +1,52 @@
-# Custom Middleware: Input Validation
+# Kanban Board API Documentation
 
-## 1. The Need
-In a standard Express API, the server blindly trusts incoming data. This creates two problems:
-1. **Data Integrity:** A user could accidentally create an empty task, cluttering the database.
-2. **Security Vulnerability:** A malicious user could send a Cross-Site Scripting (XSS) attack by injecting JavaScript (e.g., `<script>alert('hack')</script>`) into the Kanban board, which would execute in other users' browsers.
+**Base URL:** `/api`  
+**Content-Type:** `application/json`
 
-To solve this, I created a custom middleware function to act as a "Bouncer" for the API.
+---
 
-## 2. Functionality
-The `validateInput` middleware intercepts all `POST` (Create) and `PUT` (Update) requests before they reach the database routing logic. It performs two checks:
-* **Validation Check:** Ensures `req.body.title` and `req.body.taskText` are not empty strings.
-* **Sanitization Check:** Uses Regular Expressions (Regex) to scan the input for dangerous HTML characters (`<` or `>`).
+## 1. Board State
 
-## 3. Implementation Details
-The middleware utilizes the standard Express request-response cycle. 
-* If the data is **invalid**, the middleware terminates the cycle immediately and returns a `400 Bad Request` status with a JSON error message.
-* If the data is **valid**, the middleware calls the `next()` function, passing control to the appropriate API endpoint.
+| Method | Endpoint | Description | Response |
+| :--- | :--- | :--- | :--- |
+| **GET** | `/board` | Fetch full application state (columns, swimlanes, tasks, users). | `{ columns: [], swimlanes: [], tasks: [], users: [] }` |
 
-**Code Example:**
-\`\`\`javascript
-// middleware.mjs
-export const validateInput = (req, res, next) => {
-    if (req.method === 'POST' || req.method === 'PUT') {
-        const { title, taskText } = req.body;
-        const dangerousChars = /[<>]/;
+## 2. Structure (Grid)
 
-        // Block empty strings or HTML tags
-        if (title?.trim() === "" || dangerousChars.test(title)) {
-            return res.status(400).json({ error: "Invalid input." });
-        }
-    }
-    next(); // Pass control to the router
-};
-\`\`\`
+| Method | Endpoint | Body Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| **POST** | `/columns` | `{ "title": "Todo" }` | Creates a new vertical list column. |
+| **POST** | `/swimlanes` | `{ "title": "Dev" }` | Creates a new horizontal swimlane row. |
+
+## 3. User Management
+
+| Method | Endpoint | Body Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| **POST** | `/users` | `{ "username": "Alice" }` | Registers a new user. Returns `400` if username exists. |
+| **DELETE** | `/users/:username` | N/A | **Hard Delete:** Permanently deletes the user AND all tasks owned by them. |
+
+## 4. Tasks
+
+| Method | Endpoint | Body Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| **POST** | `/tasks` | `{ "columnId": 1, "swimlaneId": 1, "taskText": "Bug fix", "owner": "Alice" }` | Creates a task. `owner` defaults to "Guest" if omitted. |
+| **PUT** | `/tasks/:id` | `{ "newColumnId": 2, "newSwimlaneId": 1 }` | Moves a task to a new grid coordinate. |
+
+---
+
+## Data Models
+
+### User Object
+```json
+{
+  "id": 1741234567890,
+  "username": "Alice"
+}
+
+{
+  "id": 1741234567891,
+  "columnId": 101,
+  "swimlaneId": 1,
+  "text": "Fix bug",
+  "owner": "Alice"
+}
