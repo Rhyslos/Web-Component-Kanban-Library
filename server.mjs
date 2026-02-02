@@ -1,18 +1,14 @@
-import express from "express";
-// 1. Import your new API router
-import apiRoutes from "./API/api.mjs"; 
+import express from 'express';
+import apiRoutes from './API/api.mjs'; 
 
+const app = express();
 const PORT = 8080;
-const app = new express();
 
 app.use(express.json());
-app.use(express.static('public'));
-
-// 2. Connect the API routes to the '/api' prefix
+app.use(express.static('Public'));
 app.use('/modules', express.static('Modules'));
 app.use('/api', apiRoutes);
 
-
 app.listen(PORT, () => {
-    console.log(`Kanban Server listening on http://localhost:${PORT}`)
+    console.log(`Server running at http://localhost:${PORT}`);
 });
