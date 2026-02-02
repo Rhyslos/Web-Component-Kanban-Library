@@ -1,71 +1,77 @@
-/**
- * kanban-service.mjs
- * This class handles all communication with the Express backend.
- */
-
 class KanbanService {
-    constructor(baseUrl = '/api') {
-        this.baseUrl = baseUrl;
-    }
+    constructor(baseUrl = '/api') { this.baseUrl = baseUrl; }
 
-    // --- READ ---
     async getBoard() {
         const response = await fetch(`${this.baseUrl}/board`);
         if (!response.ok) throw new Error("Failed to fetch board data");
         return await response.json();
     }
 
-    // --- CREATE ---
     async createColumn(title) {
-        const response = await fetch(`${this.baseUrl}/columns`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title })
-        });
-        if (!response.ok) throw new Error("Failed to create column");
+        const response = await fetch(`${this.baseUrl}/columns`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
         return await response.json();
     }
 
     async createSwimlane(title) {
-        const response = await fetch(`${this.baseUrl}/swimlanes`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title })
-        });
-        if (!response.ok) throw new Error("Failed to create swimlane");
+        const response = await fetch(`${this.baseUrl}/swimlanes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
         return await response.json();
     }
 
-    async createTask(columnId, swimlaneId, taskText) {
+    async createTask(columnId, swimlaneId, text, owner) {
         const response = await fetch(`${this.baseUrl}/tasks`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ columnId, swimlaneId, taskText })
+            body: JSON.stringify({ columnId, swimlaneId, text, owner }) 
         });
-        if (!response.ok) throw new Error("Failed to create task");
         return await response.json();
     }
 
-    // --- UPDATE ---
-    async moveTask(taskId, newColumnId, newSwimlaneId) {
+    async updateColumn(id, updates) {
+        const response = await fetch(`${this.baseUrl}/columns/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) });
+        return await response.json();
+    }
+
+    // NEW: Handles both Color and Title for a specific cell
+    async updateListConfig(colId, swimId, config) {
+        const response = await fetch(`${this.baseUrl}/lists/${colId}/${swimId}/config`, { 
+            method: 'PUT', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(config) 
+        });
+        return await response.json();
+    }
+
+    async moveTask(taskId, columnId, swimlaneId) {
         const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ newColumnId, newSwimlaneId })
+            body: JSON.stringify({ newColumnId: columnId, newSwimlaneId: swimlaneId })
         });
-        if (!response.ok) throw new Error("Failed to move task");
         return await response.json();
     }
 
-    // --- DELETE ---
-    async deleteTask(taskId) {
-        const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error("Failed to delete task");
-        return true;
+    async updateTask(taskId, updates) {
+        const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) });
+        return await response.json();
+    }
+
+    async registerUser(userData) {
+        const response = await fetch(`${this.baseUrl}/users/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(userData) });
+        if (!response.ok) { const err = await response.json(); throw new Error(err.error || "Registration failed"); }
+        return await response.json();
+    }
+
+    async login(username, password) {
+        const response = await fetch(`${this.baseUrl}/users/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+        if (!response.ok) { const err = await response.json(); throw new Error(err.error || "Login failed"); }
+        return await response.json();
+    }
+
+    async deleteUser(username) {
+        const response = await fetch(`${this.baseUrl}/users/${username}`, { method: 'DELETE' });
+        if (!response.ok) { const err = await response.json(); throw new Error(err.error || "Deletion failed"); }
+        return await response.json();
     }
 }
 
-// Export a single instance of the service (Singleton pattern)
 export const api = new KanbanService();
